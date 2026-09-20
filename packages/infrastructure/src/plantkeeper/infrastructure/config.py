@@ -85,6 +85,46 @@ class Settings(BaseSettings):
     telemetry_partition_check_interval_seconds: float = 86400.0
     """How often the partition job looks for a month that is about to need one."""
 
+    # --- Catalog: Trefle ACL (Phase 9) ----------------------------------------
+    trefle_token: str = ""
+    """The Trefle access token.
+
+    Empty disables the upstream: the synchronisation saga then runs against
+    ``UnconfiguredSpeciesSource`` and reports no changes, which is what a local
+    checkout with no token configured should do.
+    """
+
+    trefle_base_url: str = "https://trefle.io/api/v1"
+    """Where the Trefle API lives; overridable so a test can point at a stub."""
+
+    trefle_requests_per_minute: int = 55
+    """The client's ceiling, one below Trefle's 60/min free tier."""
+
+    trefle_request_timeout_seconds: float = 10.0
+    """How long one Trefle request may take before it counts as a failure."""
+
+    trefle_species_limit: int = 30
+    """How many upstream species one synchronisation fetches.
+
+    The list endpoint carries no care data, so each species also costs one detail
+    request: 30 species is ~32 requests, inside the per-minute allowance.
+    """
+
+    trefle_max_attempts: int = 3
+    """How often ``tenacity`` retries one transient Trefle failure."""
+
+    trefle_breaker_failure_threshold: int = 5
+    """Consecutive failed Trefle calls that open the circuit breaker."""
+
+    trefle_breaker_reset_seconds: float = 60.0
+    """How long the breaker stays open before one trial request is allowed."""
+
+    species_cache_ttl_seconds: int = 86400
+    """How long a cached catalogue entry lives in Valkey (24 hours)."""
+
+    species_snapshot_ttl_seconds: int = 86400
+    """How long the last successful upstream snapshot survives for the fallback."""
+
     @property
     def postgres_dsn(self) -> str:
         """The SQLAlchemy URL of the write database.
