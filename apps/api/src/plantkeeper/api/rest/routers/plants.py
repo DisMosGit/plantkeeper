@@ -7,7 +7,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query, status
 
-from plantkeeper.api.deps import Mediator, view_of
+from plantkeeper.api.deps import Mediator
+from plantkeeper.api.mediator import view_of
 from plantkeeper.api.rest.routers.households import IdempotencyKey
 from plantkeeper.api.rest.schemas.garden import (
     PlantCollectionResponse,

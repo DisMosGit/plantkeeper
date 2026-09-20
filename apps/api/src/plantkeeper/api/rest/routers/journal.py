@@ -13,7 +13,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query
 
-from plantkeeper.api.deps import Mediator, view_of
+from plantkeeper.api.deps import Mediator
+from plantkeeper.api.mediator import view_of
 from plantkeeper.api.rest.schemas.journal import (
     JournalCollectionResponse,
     JournalStateResponse,

@@ -1,14 +1,15 @@
 # PlantKeeper — developer entry points.
 #
-# `migrate`, `api`, `admin`, `workers` and the `iot*` targets run the real
-# processes; `docs/iot-simulator.md` describes the simulator's flags.
+# `migrate`, `api`, `grpc`, `admin`, `workers` and the `iot*` targets run the real
+# processes; `docs/iot-simulator.md` describes the simulator's flags, and
+# `docs/grpc.md` the gRPC server and its stub generation.
 
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 COMPOSE := docker compose
 
-.PHONY: help dev up down clean lint format test test-unit test-domain test-integration test-e2e migrate api admin admin-static workers iot iot-drought iot-dry-run
+.PHONY: help dev up down clean lint format test test-unit test-domain test-integration test-e2e migrate api proto grpc admin admin-static workers iot iot-drought iot-dry-run
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -26,7 +27,7 @@ down: ## Stop local infra, keep volumes
 clean: ## Stop local infra and delete volumes
 	$(COMPOSE) down -v --remove-orphans
 
-lint: ## Ruff + Mypy + import-linter
+lint: proto ## Ruff + Mypy + import-linter
 	uv run ruff check .
 	uv run ruff format --check .
 	uv run mypy .
@@ -36,10 +37,10 @@ format: ## Apply Ruff formatting and autofixes
 	uv run ruff format .
 	uv run ruff check --fix .
 
-test: ## Run all tests with coverage
+test: proto ## Run all tests with coverage
 	uv run pytest --cov=plantkeeper --cov-report=term-missing
 
-test-unit: ## Unit tests only
+test-unit: proto ## Unit tests only
 	uv run pytest tests/unit
 
 test-domain: ## Domain unit tests with the Phase 1 coverage floor (90%)
@@ -48,7 +49,7 @@ test-domain: ## Domain unit tests with the Phase 1 coverage floor (90%)
 test-integration: ## Integration tests (needs Docker)
 	uv run pytest tests/integration -m integration
 
-test-e2e: ## End-to-end tests (start their own containers; needs Docker)
+test-e2e: proto ## End-to-end tests (start their own containers; needs Docker)
 	uv run pytest tests/e2e -m slow
 
 migrate: ## Apply all migrations (Alembic write schema + Django read schema)
@@ -57,6 +58,12 @@ migrate: ## Apply all migrations (Alembic write schema + Django read schema)
 
 api: ## Run the FastAPI write API on :8000
 	uv run uvicorn plantkeeper.api.main:app --host 0.0.0.0 --port 8000 --reload
+
+proto: ## Regenerate the gRPC Python stubs from proto/ (they are not committed)
+	uv run python tools/protogen.py
+
+grpc: proto ## Run the gRPC write API on :50051
+	uv run python -m plantkeeper.api.grpc
 
 admin-static: ## Collect the Django Admin's static files for the Starlette mount
 	uv run python apps/admin/manage.py collectstatic --noinput

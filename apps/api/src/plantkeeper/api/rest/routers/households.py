@@ -11,7 +11,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Header, status
 
-from plantkeeper.api.deps import Mediator, view_of
+from plantkeeper.api.deps import Mediator
+from plantkeeper.api.mediator import view_of
 from plantkeeper.api.rest.schemas.garden import HouseholdCreate, HouseholdResponse
 from plantkeeper.application.commands.garden import CreateHouseholdCommand
 from plantkeeper.application.queries.garden import GetHouseholdQuery
