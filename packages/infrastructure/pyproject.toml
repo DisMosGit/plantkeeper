@@ -7,9 +7,13 @@ dependencies = [
     "plantkeeper-application",
     "plantkeeper-domain",
     "aiokafka>=0.14",
+    "asyncpg>=0.31.0",
     "dishka>=1.10",
+    "faststream[kafka]>=0.7.6",
     "httpx>=0.28",
+    "pydantic-settings>=2.15.0",
     "sqlalchemy[asyncio]>=2.0.54",
+    "tenacity>=9.1.4",
     "valkey>=6.1",
 ]
 

@@ -19,6 +19,9 @@ members = ["packages/*", "apps/*", "tools/*"]
 
 [dependency-groups]
 dev = [
+    # Alembic is a developer/operator tool (`make migrate`), not something the
+    # running services import: the write-side services only need SQLAlchemy.
+    "alembic>=1.20.0",
     "import-linter>=2.15",
     "mypy>=2.3.1",
     "pre-commit>=4.6.0",
@@ -81,6 +84,13 @@ mypy_path = [
 ]
 # `uv run mypy .` must not descend into the virtualenv.
 exclude = ['^\.venv/', '^build/', '^dist/']
+
+# `python-cqrs` ships no `py.typed` marker, so a strict build refuses to analyse
+# it (`import-untyped`). It is used at exactly one seam — command/query dispatch —
+# and the reasons are recorded in `docs/adr/0003-write-side-outbox.md`.
+[[tool.mypy.overrides]]
+module = ["cqrs.*"]
+ignore_missing_imports = true
 
 [tool.pydantic-mypy]
 init_typed = true
