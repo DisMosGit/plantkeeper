@@ -43,7 +43,13 @@ def create_admin_application(*, settings: Settings | None = None) -> Starlette:
     """
     runtime = settings if settings is not None else Settings()
     django_application = get_asgi_application()
+    # Imported here rather than at module level: the projections are Django
+    # models, and importing them before ``django.setup()`` — which the line above
+    # performs — raises ``AppRegistryNotReady``.
+    from plantkeeper.admin.projections.subscriber import register_projections
+
     broker = build_broker(runtime)
+    register_projections(broker, prefix=runtime.read_side_consumer_group_prefix)
 
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:

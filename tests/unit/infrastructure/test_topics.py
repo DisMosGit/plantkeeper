@@ -52,11 +52,13 @@ from plantkeeper.infrastructure.messaging.topics import (
     CARE_EVENTS,
     CATALOG_EVENTS,
     EVENT_TOPICS,
+    EVENT_TYPES,
     GARDEN_EVENTS,
     JOURNAL_EVENTS,
     NOTIFICATIONS_EVENTS,
     TELEMETRY_EVENTS,
     UnmappedEventError,
+    event_type_for,
     partition_key_for,
     topic_for,
 )
@@ -213,3 +215,19 @@ def test_partition_key_prefers_an_aggregate_identifier(event: DomainEvent, expec
 def test_partition_key_falls_back_to_the_event_id() -> None:
     event = SpeciesSyncRequested()
     assert partition_key_for(event) == str(event.event_id)
+
+
+def test_the_event_type_registry_covers_the_catalogue() -> None:
+    """A consumer resolves ``event_name`` back to a model; it must resolve all of them."""
+    assert set(EVENT_TYPES) == {type(event).__name__ for event in EVENT_SAMPLES}
+    assert len(EVENT_TYPES) == len(EVENT_SAMPLES), "an event name maps to one model only"
+
+
+@pytest.mark.parametrize("event", EVENT_SAMPLES, ids=lambda event: type(event).__name__)
+def test_event_type_for_round_trips_the_header(event: DomainEvent) -> None:
+    assert event_type_for(type(event).__name__) is type(event)
+
+
+def test_an_unknown_event_name_has_no_type() -> None:
+    """Unknown is ``None``, not an error: only the consumer can decide to skip it."""
+    assert event_type_for("Invented") is None

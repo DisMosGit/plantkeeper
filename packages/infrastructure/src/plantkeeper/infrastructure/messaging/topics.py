@@ -83,6 +83,14 @@ EVENT_TOPICS: Final[dict[type[DomainEvent], str]] = {
 }
 """The topic of every event in ``docs/events.md``."""
 
+EVENT_TYPES: Final[dict[str, type[DomainEvent]]] = {event.__name__: event for event in EVENT_TOPICS}
+"""Every event, keyed by the ``event_name`` a message carries.
+
+A consumer reads the header, not the body, to decide what it is holding: the
+body is the event document and says nothing about its own type, and a topic
+carries every event of its context.
+"""
+
 DLQ_TOPIC: Final = "plantkeeper.dlq.v1"
 """Where the relay copies a message that exhausted its publish attempts."""
 
@@ -109,6 +117,16 @@ def topic_for(event: DomainEvent) -> str:
     if topic is None:
         raise UnmappedEventError(f"no Kafka topic is mapped for {type(event).__name__}")
     return topic
+
+
+def event_type_for(event_name: str) -> type[DomainEvent] | None:
+    """Return the event class an ``event_name`` header names, if it is known.
+
+    ``None`` rather than an exception: an unknown event is a routing concern for
+    the consumer (it may be a contract violation or a newer producer), and the
+    caller decides whether to skip it or fail.
+    """
+    return EVENT_TYPES.get(event_name)
 
 
 def partition_key_for(event: DomainEvent) -> str:
