@@ -59,6 +59,17 @@ TELEMETRY_EVENTS: Final = "telemetry.events"
 NOTIFICATIONS_EVENTS: Final = "notifications.events"
 SAGA_EVENTS: Final = "saga.events"
 
+TELEMETRY_RAW: Final = "telemetry.raw"
+"""Where the IoT simulator publishes, and the only topic that is not a domain event.
+
+Its messages are raw sensor JSON — ``sensor_id``, ``recorded_at``, ``moisture``,
+``temperature``, ``light`` — published by ``tools/iot-simulator`` rather than by
+the outbox relay. They are ingress, not history: the telemetry consumer validates
+them, stores the reading and appends the ``TelemetryReceived`` that belongs in the
+event catalogue to its **transactional outbox**, so no domain event ever travels
+this topic. ``docs/telemetry.md`` holds the envelope.
+"""
+
 EVENT_TOPICS: Final[dict[type[DomainEvent], str]] = {
     # Garden
     PlantAdded: GARDEN_EVENTS,
