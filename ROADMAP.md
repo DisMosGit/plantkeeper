@@ -212,8 +212,8 @@
 - [x] Коммит: `docs: domain glossary + BC map` · `M` 📝
 
 ### 1.11. Контракт независимости контекстов
-- [ ] import-linter contract `independence` для 7 контекстов домена · `S` 🧪
-- [ ] Коммит: `chore(lint): enforce domain context independence` · `S`
+- [x] import-linter contract `independence` для 7 контекстов домена · `S` 🧪
+- [x] Коммит: `chore(lint): enforce domain context independence` · `S`
 
 ### 1.12. Контрактный тест каталога событий
 - [x] `tests/unit/domain/test_events_catalogue.py` — 21 событие, базовые поля, JSON round-trip · `S` 🧪

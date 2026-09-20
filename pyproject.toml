@@ -151,6 +151,22 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
+name = "Domain bounded contexts are independent"
+type = "independence"
+# Contexts share only the kernel (`plantkeeper.domain.base`,
+# `.identifiers`, `.values`) and communicate through Kafka events, never by
+# importing each other. See docs/adr/0002-bounded-contexts.md.
+modules = [
+    "plantkeeper.domain.garden",
+    "plantkeeper.domain.care",
+    "plantkeeper.domain.catalog",
+    "plantkeeper.domain.journal",
+    "plantkeeper.domain.telemetry",
+    "plantkeeper.domain.notifications",
+    "plantkeeper.domain.identity",
+]
+
+[[tool.importlinter.contracts]]
 name = "IoT simulator stays independent of the application layers"
 type = "forbidden"
 source_modules = ["plantkeeper.iot_simulator"]
