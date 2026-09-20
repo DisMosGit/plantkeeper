@@ -28,7 +28,12 @@ class SqlAlchemySpeciesRepository:
         self._tracker.track(species)
 
     async def get(self, species_id: SpeciesId) -> Species | None:
-        """Return the species, taking a row lock (see the Care repository)."""
+        """Return the species, or ``None``. Takes no lock."""
+        model = await self._session.get(SpeciesModel, species_id.value)
+        return None if model is None else species_to_domain(model)
+
+    async def get_for_update(self, species_id: SpeciesId) -> Species | None:
+        """Return the species, locking it for this transaction."""
         statement = (
             select(SpeciesModel).where(SpeciesModel.id == species_id.value).with_for_update()
         )

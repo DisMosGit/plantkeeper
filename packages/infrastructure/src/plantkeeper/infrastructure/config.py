@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     outbox_batch_size: int = 100
     outbox_poll_interval_seconds: float = 1.0
     outbox_max_attempts: int = 5
+    outbox_retry_initial_wait_seconds: float = 0.5
     outbox_retry_max_wait_seconds: float = 10.0
 
     @property

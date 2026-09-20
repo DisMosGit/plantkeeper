@@ -24,3 +24,12 @@ class IdempotencyKeyConflictError(ApplicationError):
     replaying it with a different body is a client bug, and silently treating it
     as the original request would hide it.
     """
+
+
+class ConcurrentWriteError(ApplicationError):
+    """A unique constraint was violated while committing.
+
+    Raised by a unit of work instead of leaking the storage layer's own error
+    type, so the application layer can react (an idempotency race re-reads the
+    winner's response) without importing SQLAlchemy.
+    """

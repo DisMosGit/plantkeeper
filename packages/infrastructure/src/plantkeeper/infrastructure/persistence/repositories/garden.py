@@ -85,6 +85,16 @@ class SqlAlchemyHouseholdRepository:
             return None
         return household_to_domain(model, await self._plant_ids(household_id))
 
+    async def get_for_update(self, household_id: HouseholdId) -> Household | None:
+        """Return the household, locking its row for this transaction."""
+        statement = (
+            select(HouseholdModel).where(HouseholdModel.id == household_id.value).with_for_update()
+        )
+        model = (await self._session.execute(statement)).scalar_one_or_none()
+        if model is None:
+            return None
+        return household_to_domain(model, await self._plant_ids(household_id))
+
     async def save(self, household: Household) -> None:
         """Persist the household's own row.
 

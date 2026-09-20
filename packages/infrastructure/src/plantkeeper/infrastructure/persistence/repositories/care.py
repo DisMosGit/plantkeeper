@@ -31,13 +31,12 @@ class SqlAlchemyCareScheduleRepository:
         self._tracker.track(schedule)
 
     async def get(self, plant_id: PlantId) -> CareSchedule | None:
-        """Return the schedule, taking a row lock while the caller holds it.
+        """Return the schedule, or ``None``. Takes no lock."""
+        model = await self._session.get(CareScheduleModel, plant_id.value)
+        return None if model is None else care_schedule_to_domain(model)
 
-        The domain checks ``expected_version`` on every change; locking the row
-        for the rest of the transaction is what makes that check meaningful
-        under concurrency — otherwise two callers could read version N, both
-        pass the check and the second would overwrite the first.
-        """
+    async def get_for_update(self, plant_id: PlantId) -> CareSchedule | None:
+        """Return the schedule, locking it for this transaction."""
         statement = (
             select(CareScheduleModel)
             .where(CareScheduleModel.plant_id == plant_id.value)

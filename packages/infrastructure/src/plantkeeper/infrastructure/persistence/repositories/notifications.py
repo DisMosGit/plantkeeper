@@ -28,11 +28,12 @@ class SqlAlchemyNotificationRepository:
         self._tracker.track(notification)
 
     async def get(self, notification_id: NotificationId) -> Notification | None:
-        """Return the notification, or ``None``.
+        """Return the notification, or ``None``. Takes no lock."""
+        model = await self._session.get(NotificationModel, notification_id.value)
+        return None if model is None else notification_to_domain(model)
 
-        The row is locked: acknowledging a notification twice concurrently must
-        fail the domain's "acknowledged at most once" rule, not silently win.
-        """
+    async def get_for_update(self, notification_id: NotificationId) -> Notification | None:
+        """Return the notification, locking it for this transaction."""
         statement = (
             select(NotificationModel)
             .where(NotificationModel.id == notification_id.value)

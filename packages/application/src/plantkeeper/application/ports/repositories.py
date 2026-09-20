@@ -48,7 +48,11 @@ class Repository[
         ...
 
     async def get(self, entity_id: IdT) -> TAggregate | None:
-        """Return the aggregate, or ``None`` when it does not exist."""
+        """Return the aggregate, or ``None`` when it does not exist.
+
+        A plain read: it takes no lock, so a query can use it. A use case that
+        is about to change the aggregate asks for ``get_for_update`` instead.
+        """
         ...
 
     async def save(self, aggregate: TAggregate) -> None:
@@ -79,10 +83,28 @@ class HouseholdRepository(Repository[Household, HouseholdId], Protocol):
     as its own relation, so ``save`` only ever writes the household's own row.
     """
 
+    async def get_for_update(self, household_id: HouseholdId) -> Household | None:
+        """Load the household with its membership, locking it for the transaction.
+
+        Callers that are about to add or remove a plant use this: locking the
+        household row serialises concurrent changes, which is what makes the cap
+        of 50 plants hold.
+        """
+        ...
+
 
 @runtime_checkable
 class CareScheduleRepository(Repository[CareSchedule, PlantId], Protocol):
     """Watering schedules of the Care context, keyed by plant."""
+
+    async def get_for_update(self, plant_id: PlantId) -> CareSchedule | None:
+        """Load the schedule, locking it for the transaction.
+
+        The domain checks ``expected_version`` on every change; the lock is what
+        makes that check meaningful, since otherwise two callers could both read
+        version N and the second would overwrite the first.
+        """
+        ...
 
     async def list_due(self, household_id: HouseholdId, until: datetime) -> list[CareSchedule]:
         """Schedules of a household that come due at or before ``until``.
@@ -96,6 +118,14 @@ class CareScheduleRepository(Repository[CareSchedule, PlantId], Protocol):
 @runtime_checkable
 class SpeciesRepository(Repository[Species, SpeciesId], Protocol):
     """Catalogue entries of the Catalog context."""
+
+    async def get_for_update(self, species_id: SpeciesId) -> Species | None:
+        """Load the species, locking it for the transaction.
+
+        Trefle synchronisation reads at version N and writes with that version;
+        the lock is what keeps a concurrent update from being lost.
+        """
+        ...
 
     async def list_all(self) -> list[Species]:
         """List every species in the local catalogue."""
@@ -129,6 +159,14 @@ class JournalEntryRepository(Repository[JournalEntry, JournalEntryId], Protocol)
 @runtime_checkable
 class NotificationRepository(Repository[Notification, NotificationId], Protocol):
     """Notifications of the Notifications context."""
+
+    async def get_for_update(self, notification_id: NotificationId) -> Notification | None:
+        """Load the notification, locking it for the transaction.
+
+        Acknowledging twice concurrently must break the "acknowledged at most
+        once" rule loudly rather than let one of the two win quietly.
+        """
+        ...
 
     async def list_pending(self, household_id: HouseholdId) -> list[Notification]:
         """List the household's unacknowledged notifications, oldest first."""

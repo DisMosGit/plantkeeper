@@ -86,11 +86,24 @@ mypy_path = [
 exclude = ['^\.venv/', '^build/', '^dist/']
 
 # `python-cqrs` ships no `py.typed` marker, so a strict build refuses to analyse
-# it (`import-untyped`). It is used at exactly one seam — command/query dispatch —
-# and the reasons are recorded in `docs/adr/0003-write-side-outbox.md`.
+# it (`import-untyped`). It is used at exactly two seams — the command/query
+# dispatch and its DTO base classes — and the reasons are recorded in
+# `docs/adr/0003-write-side-outbox.md`.
 [[tool.mypy.overrides]]
 module = ["cqrs.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Consequence of the override above: cqrs's base classes are `Any`, and strict
+# mode refuses to subclass `Any` (`disallow_subclassing_any`). Only the modules
+# that declare those base classes are relaxed; every concrete command, response
+# and handler is typed against them, so the rest of the project stays strict.
+module = [
+    "plantkeeper.application.commands.base",
+    "plantkeeper.application.queries.base",
+    "plantkeeper.application.views",
+]
+disallow_subclassing_any = false
 
 [tool.pydantic-mypy]
 init_typed = true

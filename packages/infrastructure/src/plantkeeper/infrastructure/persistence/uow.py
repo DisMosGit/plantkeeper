@@ -15,8 +15,10 @@ from __future__ import annotations
 from types import TracebackType
 from typing import Self
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from plantkeeper.application.errors import ConcurrentWriteError
 from plantkeeper.application.ports.idempotency import IdempotencyRepository
 from plantkeeper.application.ports.outbox import OutboxRepository
 from plantkeeper.application.ports.repositories import (
@@ -149,10 +151,18 @@ class SqlAlchemyUnitOfWork:
         travel in the same transaction as the state change that produced them.
         A failure anywhere in between aborts the request and the aggregates go
         with it, so nothing is lost by draining eagerly.
+
+        A unique-constraint violation (two requests racing on the same natural
+        key) is translated into an application error: the caller can then decide
+        what the race means instead of handling a driver exception.
         """
         for event in self._tracker.collect_events():
             await self._outbox.append(event)
-        await self._session.commit()
+        try:
+            await self._session.commit()
+        except IntegrityError as exc:
+            await self._session.rollback()
+            raise ConcurrentWriteError(f"a unique constraint was violated: {exc}") from exc
         self._committed = True
 
     async def rollback(self) -> None:
