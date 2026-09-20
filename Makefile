@@ -8,7 +8,7 @@ SHELL := /bin/bash
 
 COMPOSE := docker compose
 
-.PHONY: help dev up down clean lint format test test-unit test-domain test-integration test-e2e migrate api workers iot iot-drought
+.PHONY: help dev up down clean lint format test test-unit test-domain test-integration test-e2e migrate api admin admin-static workers iot iot-drought
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -51,11 +51,18 @@ test-integration: ## Integration tests (needs Docker)
 test-e2e: ## End-to-end tests (start their own containers; needs Docker)
 	uv run pytest tests/e2e -m slow
 
-migrate: ## Apply all migrations (Alembic write schema; Django read models in Phase 3)
+migrate: ## Apply all migrations (Alembic write schema + Django read schema)
 	uv run alembic upgrade head
+	uv run python apps/admin/manage.py migrate
 
 api: ## Run the FastAPI write API on :8000
 	uv run uvicorn plantkeeper.api.main:app --host 0.0.0.0 --port 8000 --reload
+
+admin-static: ## Collect the Django Admin's static files for the Starlette mount
+	uv run python apps/admin/manage.py collectstatic --noinput
+
+admin: admin-static ## Run the read side (projections + Django Admin) on :8001
+	uv run uvicorn --factory plantkeeper.admin.asgi:create_admin_application --host 0.0.0.0 --port 8001 --reload
 
 workers: ## Run the outbox relay worker (publishes the outbox to Kafka)
 	uv run python -m plantkeeper.workers

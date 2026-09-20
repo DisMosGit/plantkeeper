@@ -13,7 +13,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Everything the write side needs to reach its infrastructure."""
+    """Everything the services need to reach their infrastructure."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -40,6 +40,13 @@ class Settings(BaseSettings):
     outbox_max_attempts: int = 5
     outbox_retry_initial_wait_seconds: float = 0.5
     outbox_retry_max_wait_seconds: float = 10.0
+
+    # --- Read side ------------------------------------------------------------
+    # Every projection gets its own consumer group (``<prefix>-garden``, …), so
+    # each one has its own offsets and its own idempotency domain. The prefix is
+    # configurable because a test that reuses a group would inherit the offsets
+    # of an earlier run.
+    read_side_consumer_group_prefix: str = "plantkeeper-read"
 
     @property
     def postgres_dsn(self) -> str:

@@ -4,6 +4,11 @@ One schema per bounded context plus one for the tables that serve *every*
 context: the transactional outbox and the HTTP idempotency keys. The names match
 ``docker/postgres/init/01-schemas.sql``; Alembic creates them too, so a database
 whose volume already existed is migrated just as well as a fresh one.
+
+The read side adds one schema of its own, ``read_analytics``, owned by Django and
+created by ``apps/admin``'s migration. It is named here so the read models and
+the schema-creating migration cannot drift from the schema the infrastructure
+already provisions.
 """
 
 from __future__ import annotations
@@ -29,3 +34,8 @@ ALL_WRITE_SCHEMAS: Final = (
     WRITE_NOTIFICATIONS,
     WRITE_SHARED,
 )
+
+READ_ANALYTICS: Final = "read_analytics"
+"""Where the projections write and Django Admin reads; Django owns its migrations."""
+
+ALL_READ_SCHEMAS: Final = (READ_ANALYTICS,)

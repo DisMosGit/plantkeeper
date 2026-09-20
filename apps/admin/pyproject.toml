@@ -6,8 +6,15 @@ requires-python = ">=3.14"
 dependencies = [
     "plantkeeper-application",
     "plantkeeper-infrastructure",
+    # `asgiref` is imported directly (`sync_to_async`), even though Django
+    # depends on it: the read side's projections are synchronous ORM calls run
+    # on a thread from the consuming event loop.
+    "asgiref>=3.12",
     "django>=6.1",
     "faststream[kafka]>=0.7.6",
+    # Django's PostgreSQL backend does not use asyncpg; it needs psycopg 3. The
+    # `binary` extra bundles libpq, so no system library is required.
+    "psycopg[binary]>=3.3",
     "starlette>=0.40",
 ]
 

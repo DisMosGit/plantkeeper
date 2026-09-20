@@ -58,6 +58,13 @@ ignore = ["ANN401"]
 [tool.ruff.lint.isort]
 known-first-party = ["plantkeeper"]
 
+[tool.ruff.lint.per-file-ignores]
+# Django's declarative class attributes — ``Meta.indexes``, ``Meta.ordering``,
+# a migration's ``operations`` — are mutable by design: Django's metaclasses read
+# them and build the immutable runtime state themselves. RUF012 would have every
+# one of them annotated ``ClassVar``, which is noise Django never asks for.
+"apps/admin/src/plantkeeper/admin/read_models/**" = ["RUF012"]
+
 # -----------------------------------------------------------------------------
 # Mypy (strict)
 # -----------------------------------------------------------------------------
@@ -111,6 +118,23 @@ disallow_subclassing_any = false
 # assert what the relay published.
 module = ["aiokafka.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Django ships no `py.typed` marker, so `models.Model`, the managers and
+# `ModelAdmin` are `Any` to a strict build. Only `apps/admin` (the read side)
+# imports it, and its own code — settings, projections, admin wiring — is fully
+# annotated; `django-stubs` would type the framework but adds a mypy plugin that
+# has to track Django's release cadence. See docs/adr/0004-read-side-projections.md.
+module = ["django.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Consequence of the override above: strict mode refuses to subclass `Any`
+# (`disallow_subclassing_any`), and the read models, the middleware and the
+# `ModelAdmin` classes all subclass Django's `Any` base classes. Only the admin
+# app is relaxed; every field and every function is annotated by hand.
+module = ["plantkeeper.admin.*"]
+disallow_subclassing_any = false
 
 [tool.pydantic-mypy]
 init_typed = true
