@@ -52,18 +52,25 @@ is described in the document named in its row.
 | Document | Produced by | Committed? |
 |----------|-------------|------------|
 | `docs/openapi.json` | `python -m plantkeeper.api.openapi` | no (`.gitignore`) |
-| `docs/asyncapi-write.json` | `python -m plantkeeper.workers.asyncapi` | no (`.gitignore`) |
 | `docs/asyncapi-read.json` | `python -m plantkeeper.admin.asyncapi` | no (`.gitignore`) |
+| `docs/asyncapi-write.json` | `python -m plantkeeper.workers.asyncapi --catalogue-from docs/asyncapi-read.json` | no (`.gitignore`) |
 | [`docs/diagrams/event-flow.md`](diagrams/event-flow.md) | `python tools/contracts.py --diagrams-only` | yes |
 | [`docs/diagrams/sagas.md`](diagrams/sagas.md) | `python tools/contracts.py --diagrams-only` | yes |
 | `docs/coverage.html` | `make coverage` | no (`.gitignore`) |
 | `apps/api/src/plantkeeper/api/grpc/generated/` | `python tools/protogen.py` | no (`.gitignore`) |
 
 `make contracts` writes every generated document, and
-`uv run python tools/contracts.py --check` fails when a checked-in diagram no longer
+`uv run python tools/contracts.py --check` fails when a checked-in artefact no longer
 matches the code. The diagrams are committed because GitHub renders a Mermaid block
 in Markdown; the JSON documents are not, for the same reason the gRPC stubs are not
 — a committed copy drifts from the contract it describes.
+
+The order the generators run in is part of the contract. `plantkeeper.admin.asyncapi`
+is the only generator that has Django configured, so it is the only one that can
+describe *both* consumer sets: it writes the read-side document and the diagrams, and
+`plantkeeper.workers.asyncapi` is handed that document's `x-plantkeeper-event-catalogue`
+instead of building a write-side-only catalogue. Otherwise every event only a read
+model consumes would be reported as consumed by nobody.
 
 ## Deliberate non-patterns
 

@@ -4,25 +4,30 @@ One command renders everything that is derived from the code:
 
 * ``docs/openapi.json`` — the REST contract, from the FastAPI application the API
   process serves;
-* ``docs/asyncapi-write.json`` — the worker's Kafka subscriptions plus the event
-  catalogue, as an AsyncAPI 3.0 document;
-* ``docs/asyncapi-read.json`` — the same for Django Admin's projections;
+* ``docs/asyncapi-read.json`` — Django Admin's Kafka subscriptions plus the
+  platform-wide event catalogue, as an AsyncAPI 3.0 document;
+* ``docs/asyncapi-write.json`` — the same for the worker, carrying the *same*
+  catalogue rather than a write-side-only one;
 * ``docs/diagrams/event-flow.md`` — the producer/consumer edge set of the event
   catalogue;
 * ``docs/diagrams/sagas.md`` — the orchestration sagas' step sequences, rendered
   by ``python-cqrs``' own ``SagaMermaid``.
 
-The two AsyncAPI documents are produced by ``python -m`` in child processes on
-purpose. The read side needs Django configured, the write side must not import it
-at all (the layered-architecture contract in ``pyproject.toml``), and a process
-that did both would be the one place where Django's configuration leaks into the
-worker. A child process per document is the honest way to keep that boundary.
+The generators run as child processes, and the order matters. Every process here
+must import some application's code, and the read side is the only one that can
+describe both consumer sets at once — its projections are consumers too — which
+means importing Django. This process must not import Django, the worker's
+generator must not either, so the admin generator runs first, writes the catalogue
+into ``docs/asyncapi-read.json`` and the diagrams into ``docs/diagrams/``, and the
+worker's generator is handed that document with ``--catalogue-from``. Without it
+the write-side document would report every Django-projected event as consumed by
+nobody.
 
 The JSON artefacts are gitignored — they are build products, like the gRPC stubs
 ``tools/protogen.py`` writes — while the diagrams are checked in (a Mermaid block
 in Markdown is readable in a diff, a JSON document is not). ``--check`` regenerates
 everything into a temporary directory and compares, so a CI run or a reviewer can
-ask "are the checked-in diagrams still true?" without writing to the tree.
+ask "are the checked-in artefacts still true?" without writing to the tree.
 
 Usage::
 
@@ -35,14 +40,14 @@ from __future__ import annotations
 
 import argparse
 import filecmp
+import importlib
 import subprocess
 import sys
 import tempfile
 import tomllib
 from collections.abc import Sequence
 from pathlib import Path
-
-from plantkeeper.infrastructure.contracts.diagrams import render_diagrams
+from typing import cast
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS_ROOT = ROOT / "docs"
@@ -50,12 +55,20 @@ DIAGRAMS_ROOT = DOCS_ROOT / "diagrams"
 
 ROOT_PYPROJECT = ROOT / "pyproject.toml"
 
-CONTRACT_TARGETS: tuple[tuple[str, str], ...] = (
-    ("plantkeeper.api.openapi", "openapi.json"),
-    ("plantkeeper.workers.asyncapi", "asyncapi-write.json"),
-    ("plantkeeper.admin.asyncapi", "asyncapi-read.json"),
-)
-"""The generated JSON artefacts: the module that writes each one, and its filename."""
+OPENAPI_MODULE = "plantkeeper.api.openapi"
+OPENAPI_FILE = "openapi.json"
+
+ADMIN_MODULE = "plantkeeper.admin.asyncapi"
+ADMIN_FILE = "asyncapi-read.json"
+
+WORKER_MODULE = "plantkeeper.workers.asyncapi"
+WORKER_FILE = "asyncapi-write.json"
+
+VERSION_MODULES: tuple[str, ...] = (OPENAPI_MODULE, ADMIN_MODULE, WORKER_MODULE)
+"""The generators whose stamped version must match the workspace's release."""
+
+JSON_ARTEFACTS: tuple[str, ...] = (OPENAPI_FILE, ADMIN_FILE, WORKER_FILE)
+"""The generated JSON documents, in generation order."""
 
 
 def project_version() -> str:
@@ -72,63 +85,99 @@ def check_version() -> int:
 
     The constants are read from the generator modules rather than back out of the
     artefacts they wrote: the point is to catch a module whose literal drifted from
-    the release, and a value read from its own output could never do that. The read
-    side is not imported — importing it configures Django, and this process must
-    not be the one that does.
+    the release, and a value read from its own output could never do that. Every
+    module is imported by name here rather than at the top of this file, because
+    importing the admin's one configures Django; the sub-process generators have
+    run or are about to run anyway, so by this point it costs nothing.
     """
-    from plantkeeper.api.openapi import VERSION as API_VERSION
-    from plantkeeper.workers.asyncapi import VERSION as WORKER_VERSION
-
     version = project_version()
-    declared = {
-        "plantkeeper.api.openapi": API_VERSION,
-        "plantkeeper.workers.asyncapi": WORKER_VERSION,
-    }
-    for module, value in sorted(declared.items()):
-        if value != version:
+    mismatched = False
+    for module_name in VERSION_MODULES:
+        declared = cast("str", importlib.import_module(module_name).VERSION)
+        if declared != version:
             print(
-                f"error: {module} declares version {value}, but pyproject.toml says {version}",
+                f"error: {module_name} declares version {declared}, "
+                f"but pyproject.toml says {version}",
                 file=sys.stderr,
             )
-    return 0 if all(value == version for value in declared.values()) else 1
+            mismatched = True
+    return 1 if mismatched else 0
 
 
-def run_contract_generators(output_root: Path) -> list[Path]:
-    """Run each process's contract module, writing its JSON under ``output_root``."""
-    written: list[Path] = []
-    for module, filename in CONTRACT_TARGETS:
-        output = output_root / filename
-        subprocess.run(
-            [sys.executable, "-m", module, "--output", str(output)],
-            check=True,
-            cwd=ROOT,
-        )
-        written.append(output)
-    return written
+def run_openapi(output: Path) -> None:
+    """Write the REST contract."""
+    subprocess.run(
+        [sys.executable, "-m", OPENAPI_MODULE, "--output", str(output)],
+        check=True,
+        cwd=ROOT,
+    )
 
 
-def stale_diagrams(diagrams: dict[Path, str]) -> list[str]:
-    """Return the diagram filenames whose content on disk differs."""
-    return [
-        path.name
-        for path, content in diagrams.items()
-        if not path.exists() or path.read_text(encoding="utf-8") != content
-    ]
+def run_admin(output: Path, *, diagrams_root: Path) -> None:
+    """Write the read side's document, and the platform's diagrams with it.
+
+    One child process for both because both need Django configured and both are
+    statements about every consumer in the platform, not only the read side's.
+    """
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            ADMIN_MODULE,
+            "--output",
+            str(output),
+            "--diagrams-root",
+            str(diagrams_root),
+        ],
+        check=True,
+        cwd=ROOT,
+    )
 
 
-def check_contracts(diagrams: dict[Path, str]) -> int:
+def run_worker(output: Path, *, catalogue_from: Path) -> None:
+    """Write the write side's document, carrying the platform-wide catalogue."""
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            WORKER_MODULE,
+            "--output",
+            str(output),
+            "--catalogue-from",
+            str(catalogue_from),
+        ],
+        check=True,
+        cwd=ROOT,
+    )
+
+
+def generate(output_root: Path, *, diagrams_root: Path) -> None:
+    """Run every generator, in the order their dependencies demand."""
+    output_root.mkdir(parents=True, exist_ok=True)
+    run_openapi(output_root / OPENAPI_FILE)
+    run_admin(output_root / ADMIN_FILE, diagrams_root=diagrams_root)
+    run_worker(output_root / WORKER_FILE, catalogue_from=output_root / ADMIN_FILE)
+
+
+def check_contracts() -> int:
     """Return 0 when every artefact matches the code, 1 otherwise; write nothing."""
     if check_version() != 0:
         return 1
+    stale: list[str] = []
     with tempfile.TemporaryDirectory() as temporary:
-        output_root = Path(temporary)
-        run_contract_generators(output_root)
-        stale = [
-            filename
-            for _, filename in CONTRACT_TARGETS
-            if not filecmp.cmp(output_root / filename, DOCS_ROOT / filename, shallow=False)
-        ]
-    stale.extend(stale_diagrams(diagrams))
+        root = Path(temporary)
+        diagrams_root = root / "diagrams"
+        generate(root, diagrams_root=diagrams_root)
+        stale.extend(
+            name
+            for name in JSON_ARTEFACTS
+            if not filecmp.cmp(root / name, DOCS_ROOT / name, shallow=False)
+        )
+        stale.extend(
+            path.name
+            for path in _diagram_outputs(diagrams_root)
+            if not filecmp.cmp(path, DIAGRAMS_ROOT / path.name, shallow=False)
+        )
     if stale:
         print(
             "stale artefacts: "
@@ -141,21 +190,36 @@ def check_contracts(diagrams: dict[Path, str]) -> int:
     return 0
 
 
-def write_artefacts(diagrams: dict[Path, str], *, diagrams_only: bool) -> int:
-    """Write the requested artefacts and report what was written."""
-    written: list[Path] = []
-    if not diagrams_only:
-        if check_version() != 0:
-            return 1
-        DOCS_ROOT.mkdir(parents=True, exist_ok=True)
-        written.extend(run_contract_generators(DOCS_ROOT))
-    DIAGRAMS_ROOT.mkdir(parents=True, exist_ok=True)
-    for path, content in diagrams.items():
-        path.write_text(content, encoding="utf-8")
-        written.append(path)
-    for path in written:
+def write_artefacts() -> int:
+    """Write every artefact and report what was written."""
+    if check_version() != 0:
+        return 1
+    generate(DOCS_ROOT, diagrams_root=DIAGRAMS_ROOT)
+    for name in JSON_ARTEFACTS:
+        print(f"wrote {(DOCS_ROOT / name).relative_to(ROOT)}")
+    for path in _diagram_outputs(DIAGRAMS_ROOT):
         print(f"wrote {path.relative_to(ROOT)}")
     return 0
+
+
+def write_diagrams() -> int:
+    """Render only the diagrams, through the process that can describe both sides.
+
+    It still writes the read-side document on the way: the diagram needs the
+    catalogue in it, and regenerating a gitignored build product is cheaper than a
+    second code path that builds the same view.
+    """
+    if check_version() != 0:
+        return 1
+    run_admin(DOCS_ROOT / ADMIN_FILE, diagrams_root=DIAGRAMS_ROOT)
+    for path in _diagram_outputs(DIAGRAMS_ROOT):
+        print(f"wrote {path.relative_to(ROOT)}")
+    return 0
+
+
+def _diagram_outputs(diagrams_root: Path) -> list[Path]:
+    """Return the diagram files under ``diagrams_root``, in a stable order."""
+    return sorted(diagrams_root.glob("*.md"))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -176,10 +240,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     arguments = parser.parse_args(argv)
 
-    diagrams = render_diagrams(DIAGRAMS_ROOT)
     if arguments.check:
-        return check_contracts(diagrams)
-    return write_artefacts(diagrams, diagrams_only=arguments.diagrams_only)
+        return check_contracts()
+    if arguments.diagrams_only:
+        return write_diagrams()
+    return write_artefacts()
 
 
 if __name__ == "__main__":

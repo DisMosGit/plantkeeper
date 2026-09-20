@@ -212,18 +212,26 @@ Which shape fits which saga, and where saga state lives, is
 | Artefact | Source | Command |
 |----------|--------|---------|
 | `docs/openapi.json` | `plantkeeper.api.main.create_app()` | `make contracts` |
-| `docs/asyncapi-write.json` | the worker's broker routes + the event catalogue | `make contracts` |
 | `docs/asyncapi-read.json` | the admin's projection routes + the event catalogue | `make contracts` |
-| `docs/diagrams/event-flow.md` | `EVENT_TOPICS` + the consumer registries | `make diagrams` |
+| `docs/asyncapi-write.json` | the worker's broker routes + the admin's catalogue | `make contracts` |
+| `docs/diagrams/event-flow.md` | `EVENT_TOPICS` + both consumer registries | `make diagrams` |
 | `docs/diagrams/sagas.md` | `SAGA_TYPES` and each saga's step list | `make diagrams` |
 
 The documents are derived from the code that implements them: the AsyncAPI documents
 are built from the same broker registrations the two processes use, and the diagrams
-from the registries the worker and the admin subscribe with. The producers the relay
-owns are not FastStream routes, so they travel in the documents as the
-`x-plantkeeper-event-catalogue` extension. `uv run python tools/contracts.py --check`
-fails when a checked-in diagram no longer matches the code; the tests in
-`tests/unit/docs` and `tests/unit/contracts` do the same during `make test`.
+from the registries the worker and the admin subscribe with.
+
+The producers the relay owns are not FastStream routes, so they travel in the documents
+as the `x-plantkeeper-event-catalogue` extension — and that extension is built *once*,
+by `plantkeeper.admin.asyncapi`. Describing the platform's consumers means naming both
+sets, which means importing Django, which neither `plantkeeper.infrastructure` nor the
+worker's generator may do. `make contracts` therefore runs the admin generator first
+and passes its document to the worker's with `--catalogue-from`; the same process writes
+the diagrams, so they can draw the read side's edges too.
+
+`uv run python tools/contracts.py --check` fails when a checked-in artefact no longer
+matches the code; the tests in `tests/unit/docs` and `tests/unit/contracts` do the same
+during `make test`.
 
 ## Local topology
 

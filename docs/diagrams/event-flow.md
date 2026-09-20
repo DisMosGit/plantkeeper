@@ -7,7 +7,9 @@
 >
 > A consumer edge is drawn only when it crosses a bounded context: an event's own
 > context consuming it is the default, and drawing every one of those would turn
-> the diagram into a restatement of `docs/events.md`.
+> the diagram into a restatement of `docs/events.md`. The notes below the diagram
+> say which events are consumed only inside their own context and which no
+> consumer handles at all.
 
 ```mermaid
 graph LR
@@ -29,14 +31,27 @@ graph LR
     telemetryevents["telemetry.events"]
   end
   subgraph consume [Cross-context consumers]
+    Care -->|"CareMissed"| Analytics
     Care -->|"CareMissed"| Notifications
+    Care -->|"CareScheduleCreated"| Analytics
+    Care -->|"CareSkipped"| Analytics
+    Journal -->|"JournalEntryAdded"| Analytics
+    Garden -->|"PlantAdded"| Analytics
+    Garden -->|"PlantMoved"| Analytics
+    Garden -->|"PlantOnboarded"| Analytics
+    Garden -->|"PlantRemoved"| Analytics
     Telemetry -->|"SoilMoistureHigh"| Care
     Telemetry -->|"SoilMoistureLow"| Notifications
+    Catalog -->|"SpeciesAdded"| Analytics
+    Catalog -->|"SpeciesUpdated"| Analytics
     Telemetry -->|"TelemetryReceived"| Care
     Telemetry -->|"TemperatureAnomaly"| Notifications
+    Care -->|"WateringCompleted"| Analytics
     Care -->|"WateringCompleted"| Journal
     Care -->|"WateringDue"| Notifications
+    Care -->|"WateringRescheduled"| Analytics
     Care -->|"WateringRescheduled"| Notifications
   end
-  note["no cross-context consumer: CareScheduleCreated, CareSkipped, JournalEntryAdded, NotificationRead, PlantMoved, PlantOnboarded, PlantRemoved, SagaCompensated, SagaCompleted, SagaFailed, SagaStarted, SensorOffline, SpeciesAdded"]
+  note["consumed only inside their own context: NotificationCreated, NotificationRead, SpeciesCacheInvalidated, SpeciesSyncRequested"]
+  note2["no consumer at all: SagaCompensated, SagaCompleted, SagaFailed, SagaStarted, SensorOffline"]
 ```

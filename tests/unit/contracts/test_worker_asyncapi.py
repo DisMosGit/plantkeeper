@@ -6,24 +6,39 @@ document FastStream derives from it says what the registries say. The failure th
 guards against is a quiet one: FastStream keys a channel by the subscription's
 title and otherwise falls back to the handler's function name, so an untitled
 subscriber collapses into another one's channel instead of erroring.
+
+The event catalogue is the read side's, handed in exactly as ``make contracts``
+hands it in: this process may not import Django, so it cannot build the
+platform-wide view itself.
 """
 
 from __future__ import annotations
 
+import json
 import warnings
+from pathlib import Path
 
+from plantkeeper.admin.asyncapi import build_document as build_admin_document
 from plantkeeper.application.sagas.registry import WORKER_CONSUMER_TYPES
 from plantkeeper.infrastructure.config import Settings
 from plantkeeper.infrastructure.messaging.topics import EVENT_TOPICS
-from plantkeeper.workers.asyncapi import VERSION, build_document
+from plantkeeper.workers.asyncapi import CATALOGUE_KEY, VERSION, build_document, read_catalogue
 from plantkeeper.workers.consumers import topics_for
+
+
+def platform_catalogue(settings: Settings) -> dict[str, object]:
+    """Return the catalogue the admin generator produces, as the tool passes it."""
+    document = build_admin_document(settings)
+    catalogue = document[CATALOGUE_KEY]
+    assert isinstance(catalogue, dict)
+    return catalogue
 
 
 def build_document_without_warnings(settings: Settings) -> dict[str, object]:
     """Build the document, turning FastStream's channel-collision warning into an error."""
     with warnings.catch_warnings():
         warnings.simplefilter("error", RuntimeWarning)
-        return build_document(settings)
+        return build_document(settings, catalogue=platform_catalogue(settings))
 
 
 def expected_subscriptions(settings: Settings) -> set[str]:
@@ -78,8 +93,54 @@ def test_every_channel_is_an_operation() -> None:
 def test_the_document_carries_the_event_catalogue() -> None:
     """The producer half — the outbox relay — is not a FastStream route."""
     document = build_document_without_warnings(Settings())
-    extension = document["x-plantkeeper-event-catalogue"]
+    extension = document[CATALOGUE_KEY]
     assert isinstance(extension, dict)
     events = extension["events"]
+    assert isinstance(events, list)
+    assert {event["event_name"] for event in events} == {e.__name__ for e in EVENT_TOPICS}
+
+
+def test_the_catalogue_the_worker_embeds_names_the_read_side_too() -> None:
+    """The worker's document must not report a read-side-only event as unconsumed.
+
+    ``JournalEntryAdded`` is consumed by Django Admin's journal projection and by
+    nothing on the write side; a write-side-only catalogue would call it
+    unconsumed, which is why ``make contracts`` generates the catalogue in the
+    admin process and hands it over.
+    """
+    document = build_document_without_warnings(Settings())
+    extension = document[CATALOGUE_KEY]
+    assert isinstance(extension, dict)
+    events = {event["event_name"]: event for event in extension["events"]}
+    consumers = events["JournalEntryAdded"]["consumers"]
+    assert any(consumer["consumer_group"] == "journal" for consumer in consumers)
+
+
+def test_a_document_built_without_a_catalogue_still_has_one() -> None:
+    """The fallback is the write-side view, which is narrower but never empty."""
+    document = build_document(Settings())
+    extension = document[CATALOGUE_KEY]
+    assert isinstance(extension, dict)
+    events = extension["events"]
+    assert isinstance(events, list)
+    assert {event["event_name"] for event in events} == {e.__name__ for e in EVENT_TOPICS}
+
+
+def test_the_catalogue_can_be_handed_over_as_a_file(tmp_path: Path) -> None:
+    """``make contracts`` passes it on disk; the reader must accept that shape.
+
+    The tool cannot import this module's caller either, so the hand-over is a file,
+    and the shape of that file — an AsyncAPI document whose extension is the
+    catalogue — is part of the contract between the two generators.
+    """
+    admin_path = tmp_path / "asyncapi-read.json"
+    admin_path.write_text(
+        json.dumps(build_admin_document(Settings())),
+        encoding="utf-8",
+    )
+
+    catalogue = read_catalogue(str(admin_path))
+    assert catalogue is not None
+    events = catalogue["events"]
     assert isinstance(events, list)
     assert {event["event_name"] for event in events} == {e.__name__ for e in EVENT_TOPICS}

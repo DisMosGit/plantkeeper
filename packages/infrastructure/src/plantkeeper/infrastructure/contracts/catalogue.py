@@ -79,13 +79,20 @@ CONSUMER_CONTEXTS: Final[dict[str, str]] = {
     "species-cache": "Catalog",
     "onboard-plant": "Garden",
     "species-sync": "Catalog",
+    # The read side's projections, whose group suffix is the read model's name.
+    # They are listed here so a diagram of the whole platform can label them; the
+    # worker's catalogue does not see them, and the admin's does.
+    "garden": "Analytics",
+    "care": "Analytics",
+    "catalog": "Analytics",
+    "journal": "Analytics",
 }
 """The bounded context each consumer group serves, keyed by the group's suffix.
 
 The groups are named after their job — ``garden``, ``notifications``,
 ``journal-entries`` — not after a context, so this mapping has to be explicit.
-It is only used to label the generated diagram; the catalogue rows carry the group
-names themselves, which is what ``docs/asyncapi-write.json`` subscribes with.
+The read side's five projections all serve Analytics: they are the read side's
+writers, and each one consumes the context its read model mirrors.
 """
 
 
@@ -252,16 +259,22 @@ def event_flow_diagram[EventT: DomainEvent, HandlerT: object](
 
     Only cross-context edges are drawn for consumers. A topic's events are mostly
     consumed by their own context — ``AdaptiveWateringSaga`` reads
-    ``telemetry.events`` for Telemetry's own facts — and drawing those would turn
-    the diagram into a list of the catalogue it is meant to summarise. Events that
-    no cross-context consumer handles at all are called out in a note, because
-    "nobody consumes this" is a fact a reader must not have to infer from silence.
+    ``telemetry.events`` for Telemetry's own facts, ``OnboardPlantSaga`` reads
+    ``garden.events`` for Garden's — and drawing those would turn the diagram into
+    a list of the catalogue it is meant to summarise.
+
+    What is *not* drawn is therefore still a fact, and the notes state it in two
+    parts: an event consumed only inside its own context is named as such, and an
+    event no consumer handles at all is named separately. Silence would be
+    indistinguishable between "same context" and "nobody", which is exactly the
+    distinction a reader of this diagram is looking for.
     """
     rows = catalogue_rows(projections)
     topics = sorted({str(row["topic"]) for row in rows})
     producers: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
     edges: dict[tuple[str, str], list[str]] = defaultdict(list)
     unconsumed: list[str] = []
+    same_context_only: list[str] = []
     for row in rows:
         event = str(row["event_name"])
         producers[str(row["producer"])][str(row["topic"])].append(event)
@@ -269,11 +282,15 @@ def event_flow_diagram[EventT: DomainEvent, HandlerT: object](
         assert isinstance(consumers, list)
         if not consumers:
             unconsumed.append(event)
+        cross_context = False
         for consumer in consumers:
             assert isinstance(consumer, dict)
             context = _consumer_context(str(consumer["consumer_group"]))
             if context != str(row["context"]):
                 edges[(event, context)].append(str(row["context"]))
+                cross_context = True
+        if consumers and not cross_context:
+            same_context_only.append(event)
 
     lines = ["```mermaid", "graph LR", "  subgraph produce [Producers]"]
     for producer, topics_of in sorted(producers.items()):
@@ -288,8 +305,13 @@ def event_flow_diagram[EventT: DomainEvent, HandlerT: object](
         owner = " / ".join(sorted(set(owners)))
         lines.append(f'    {_node(owner)} -->|"{event}"| {_node(consumer_context)}')
     lines.append("  end")
+    if same_context_only:
+        lines.append(
+            f'  note["consumed only inside their own context: '
+            f'{", ".join(sorted(same_context_only))}"]'
+        )
     if unconsumed:
-        lines.append(f'  note["no cross-context consumer: {", ".join(sorted(unconsumed))}"]')
+        lines.append(f'  note2["no consumer at all: {", ".join(sorted(unconsumed))}"]')
     lines.append("```")
     return "\n".join(lines) + "\n"
 

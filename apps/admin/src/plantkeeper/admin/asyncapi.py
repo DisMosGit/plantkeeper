@@ -1,4 +1,4 @@
-"""The read side's AsyncAPI document.
+"""The read side's AsyncAPI document, and the platform's generated diagrams.
 
 The admin process is the other Kafka consumer group in the platform: five
 projections, one per read model, each subscribed to the topics its events travel
@@ -8,13 +8,23 @@ processes may not import each other (the layered-architecture contract in
 asking "what feeds Django Admin?" should not have to filter the write side's sagas
 out of the answer.
 
+This module is also the one place that describes the *whole* platform, and the
+reason is Django. The event catalogue, the ``x-plantkeeper-event-catalogue``
+extension and the event-flow diagram are statements about both consumer sets at
+once: without the projections, the events only a read model consumes would be
+reported as consumed by nobody. Building that view means importing Django, and
+``plantkeeper.infrastructure`` may not; so this process builds it, writes it beside
+its own document, and the worker's generator reads the same catalogue out of
+``--catalogue-from`` instead of rebuilding a half of it.
+
 Django has to be configured before a projection can be imported, and
-:func:`main` does that itself: ``django.setup()`` loads the app registry without
-opening a database connection, which is what keeps this usable on a machine with
-no Postgres running.
+:func:`configure_django` does that itself: ``django.setup()`` loads the app registry
+without opening a database connection, which is what keeps this usable on a machine
+with no Postgres running.
 
 Run it with ``python -m plantkeeper.admin.asyncapi --output docs/asyncapi-read.json``
-(or through ``make contracts``, which runs all three generators).
+(or through ``make contracts``, which coordinates all three generators and the
+diagrams).
 """
 
 from __future__ import annotations
@@ -31,6 +41,7 @@ from faststream.specification.asyncapi import AsyncAPI
 
 from plantkeeper.infrastructure.config import Settings
 from plantkeeper.infrastructure.contracts.catalogue import catalogue_extension
+from plantkeeper.infrastructure.contracts.diagrams import render_diagrams
 
 TITLE = "PlantKeeper read-side events"
 """The document's title, fixed so two runs produce the same bytes."""
@@ -82,8 +93,8 @@ def build_document(settings: Settings) -> dict[str, object]:
     ).to_specification()
     document = specification.to_jsonable()
     assert isinstance(document, dict)
-    # The read side sees both halves: it consumes the catalogue's events, and the
-    # producers are the same components the write side's document names.
+    # The catalogue sees both halves: this process consumes the events, and the
+    # producers are the components the write side's document names.
     document["x-plantkeeper-event-catalogue"] = catalogue_extension(ALL_PROJECTIONS)
     return document
 
@@ -93,12 +104,29 @@ def render(document: dict[str, object]) -> str:
     return json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
 
+def build_diagrams(diagrams_root: Path) -> dict[Path, str]:
+    """Return the platform's diagram files, with the read side's consumers included."""
+    configure_django()
+    from plantkeeper.admin.projections import ALL_PROJECTIONS
+
+    return render_diagrams(diagrams_root, ALL_PROJECTIONS)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """Write the read side's AsyncAPI document to ``--output``."""
+    """Write the read side's AsyncAPI document, and the diagrams when asked."""
     parser = argparse.ArgumentParser(description="Export the read side's AsyncAPI document.")
     parser.add_argument("--output", required=True, help="where to write the JSON document")
+    parser.add_argument(
+        "--diagrams-root",
+        help="also render docs/diagrams/*.md into this directory",
+    )
     arguments = parser.parse_args(argv)
     Path(arguments.output).write_text(render(build_document(Settings())), encoding="utf-8")
+    if arguments.diagrams_root:
+        root = Path(arguments.diagrams_root)
+        root.mkdir(parents=True, exist_ok=True)
+        for path, content in build_diagrams(root).items():
+            path.write_text(content, encoding="utf-8")
     return 0
 
 
@@ -106,4 +134,4 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
-__all__ = ["TITLE", "VERSION", "build_document", "main", "render"]
+__all__ = ["TITLE", "VERSION", "build_diagrams", "build_document", "main", "render"]

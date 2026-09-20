@@ -2,16 +2,19 @@
 
 ``docs/diagrams/*.md`` is checked in so GitHub renders it, and that is exactly why
 it can go stale: a new saga step or a new consumer changes the diagram, and nothing
-in the repository notices until a reader does. These tests regenerate both files
-from the same functions ``make diagrams`` uses and compare them with what is
-committed, so drift fails the build where a stale diagram would otherwise pass
-review.
+in the repository notices until a reader does. These tests call the same functions
+``make diagrams`` runs — with the same inputs, including the read side's projections
+— and compare the result with what is committed.
+
+Django is configured by ``tests/unit/docs/conftest.py`` because a projection cannot
+be imported without it.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
+from plantkeeper.admin.projections import ALL_PROJECTIONS
 from plantkeeper.application.sagas.registry import SAGA_TYPES
 from plantkeeper.infrastructure.contracts.catalogue import (
     EVENT_CONTEXTS,
@@ -25,18 +28,34 @@ from plantkeeper.infrastructure.messaging.topics import EVENT_TOPICS
 DIAGRAMS_ROOT = Path(__file__).resolve().parents[3] / "docs" / "diagrams"
 
 
+def committed(name: str) -> str:
+    """Return a checked-in diagram file's text."""
+    return (DIAGRAMS_ROOT / name).read_text(encoding="utf-8")
+
+
 def test_the_event_flow_diagram_matches_the_committed_file() -> None:
     """``docs/diagrams/event-flow.md`` is exactly what the catalogue renders."""
-    rendered = render_diagrams(DIAGRAMS_ROOT)
-    committed = (DIAGRAMS_ROOT / "event-flow.md").read_text(encoding="utf-8")
-    assert committed == rendered[DIAGRAMS_ROOT / "event-flow.md"]
+    rendered = render_diagrams(DIAGRAMS_ROOT, ALL_PROJECTIONS)
+    assert committed("event-flow.md") == rendered[DIAGRAMS_ROOT / "event-flow.md"]
 
 
 def test_the_saga_diagram_matches_the_committed_file() -> None:
     """``docs/diagrams/sagas.md`` is exactly what ``SagaMermaid`` renders."""
-    rendered = render_diagrams(DIAGRAMS_ROOT)
-    committed = (DIAGRAMS_ROOT / "sagas.md").read_text(encoding="utf-8")
-    assert committed == rendered[DIAGRAMS_ROOT / "sagas.md"]
+    rendered = render_diagrams(DIAGRAMS_ROOT, ALL_PROJECTIONS)
+    assert committed("sagas.md") == rendered[DIAGRAMS_ROOT / "sagas.md"]
+
+
+def test_the_event_flow_diagram_draws_both_consumer_sets() -> None:
+    """A diagram of the write side alone would misreport the read side's events.
+
+    ``GardenProjection`` consumes ``PlantAdded``, so the edge from Garden to
+    Analytics has to be there; without the projections the diagram would instead
+    claim that no consumer handles the event at all.
+    """
+    diagram = event_flow_diagram(ALL_PROJECTIONS)
+    assert 'Garden -->|"PlantAdded"| Analytics' in diagram
+    assert "no consumer at all" in diagram
+    assert "PlantAdded" not in diagram.split("no consumer at all", 1)[1]
 
 
 def test_every_saga_has_a_diagram() -> None:
@@ -59,20 +78,19 @@ def test_every_saga_diagram_names_its_real_steps() -> None:
 
 def test_the_event_flow_diagram_mentions_every_topic() -> None:
     """Each topic of the catalogue appears as a node in the diagram."""
-    diagram = event_flow_diagram()
+    diagram = event_flow_diagram(ALL_PROJECTIONS)
     for topic in {*EVENT_TOPICS.values()}:
         assert topic in diagram
 
 
-def test_the_event_flow_diagram_mentions_every_cross_context_consumer() -> None:
-    """A cross-context edge is drawn for every event that has one.
+def test_the_event_flow_diagram_accounts_for_every_event() -> None:
+    """Every event is either an edge label or named in one of the notes.
 
-    The edge labels an event, and the note names the events nobody consumes
-    across a context boundary; between the two, every event of the catalogue has
-    to be accounted for in the diagram.
+    The diagram deliberately draws no same-context edge, so the two notes are what
+    keeps it honest: whatever is not drawn has to be accounted for somewhere.
     """
-    diagram = event_flow_diagram()
-    for row in catalogue_rows():
+    diagram = event_flow_diagram(ALL_PROJECTIONS)
+    for row in catalogue_rows(ALL_PROJECTIONS):
         assert str(row["event_name"]) in diagram
 
 

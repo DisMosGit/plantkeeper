@@ -157,10 +157,13 @@ uv run python tools/contracts.py --check   # fail if a checked-in diagram is sta
 process. The two AsyncAPI documents are built from the same broker registrations
 `make workers` and `make admin` use; because the write side's producers are the outbox
 relay rather than FastStream routes, each document carries the full event catalogue as
-an `x-plantkeeper-event-catalogue` extension. The JSON documents are gitignored build
-products (like the gRPC stubs); the Mermaid diagrams are committed so GitHub renders
-them, and `tests/unit/contracts` plus `tests/unit/docs` fail when either drifts from
-the code.
+an `x-plantkeeper-event-catalogue` extension. That catalogue is generated once, in the
+admin process — the only generator with Django configured, and therefore the only one
+that can name both consumer sets — and handed to the worker's generator, so neither
+document reports a read-side-only event as consumed by nobody. The JSON documents are
+gitignored build products (like the gRPC stubs); the Mermaid diagrams are committed so
+GitHub renders them, and `tests/unit/contracts` plus `tests/unit/docs` fail when either
+drifts from the code.
 
 ## Documentation
 

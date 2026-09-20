@@ -15,10 +15,13 @@ directory of scripts, not an installed package.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Final
 
+from plantkeeper.domain.base import DomainEvent
 from plantkeeper.infrastructure.contracts.catalogue import (
+    ProjectionLike,
     event_flow_diagram,
     saga_diagrams,
 )
@@ -35,7 +38,9 @@ EVENT_FLOW_PREAMBLE: Final = """# Event flow — generated
 >
 > A consumer edge is drawn only when it crosses a bounded context: an event's own
 > context consuming it is the default, and drawing every one of those would turn
-> the diagram into a restatement of `docs/events.md`.
+> the diagram into a restatement of `docs/events.md`. The notes below the diagram
+> say which events are consumed only inside their own context and which no
+> consumer handles at all.
 
 """
 
@@ -49,12 +54,23 @@ SAGA_DIAGRAMS_PREAMBLE: Final = """# Orchestration sagas — generated
 """
 
 
-def render_diagrams(diagrams_root: Path) -> dict[Path, str]:
-    """Return each checked-in diagram file's full text, keyed by its path."""
+def render_diagrams[EventT: DomainEvent, HandlerT: object](
+    diagrams_root: Path,
+    projections: Iterable[ProjectionLike[EventT, HandlerT]] = (),
+) -> dict[Path, str]:
+    """Return each checked-in diagram file's full text, keyed by its path.
+
+    ``projections`` is the read side's consumer list. The event-flow diagram is a
+    statement about the *platform*, so a caller that can describe both consumer
+    sets passes them: without the projections, every event only a read model
+    consumes would be reported as consumed by nobody. The caller is
+    ``python -m plantkeeper.admin.asyncapi``, the one process that has Django
+    configured (``plantkeeper.infrastructure`` may not import it).
+    """
     saga_blocks = "\n".join(
         f"## `{name}`\n\n```mermaid\n{body.rstrip()}\n```\n" for name, body in saga_diagrams()
     )
     return {
-        diagrams_root / EVENT_FLOW_FILE: EVENT_FLOW_PREAMBLE + event_flow_diagram(),
+        diagrams_root / EVENT_FLOW_FILE: EVENT_FLOW_PREAMBLE + event_flow_diagram(projections),
         diagrams_root / SAGA_DIAGRAMS_FILE: SAGA_DIAGRAMS_PREAMBLE + saga_blocks,
     }

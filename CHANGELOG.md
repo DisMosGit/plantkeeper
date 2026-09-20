@@ -45,13 +45,17 @@ rest is the phase-by-phase history.
 - `plantkeeper.infrastructure.contracts` — the derivations every document and diagram
   is built from (`catalogue.py`: the catalogue rows, the event-flow edge set and the
   saga sequences; `diagrams.py`: the two checked-in files' text).
-- `tools/contracts.py` and the `make contracts` / `make diagrams` targets. The two
-  AsyncAPI documents are generated in child processes each, because the read side
-  needs Django configured and the write side must not import it.
+- `tools/contracts.py` and the `make contracts` / `make diagrams` targets. The
+  generators run as child processes, and in a fixed order: the admin generator is the
+  only one with Django configured, so it builds the platform-wide catalogue and the
+  diagrams, and the worker's generator is handed its document with `--catalogue-from`.
+  Without that, every event only a read model consumes would be reported as consumed
+  by nobody.
 - `docs/diagrams/event-flow.md` — the producer/consumer topology of the event
-  catalogue, drawn from `EVENT_TOPICS` and the consumer registries — and
-  `docs/diagrams/sagas.md` — the two orchestration sagas' step sequences, rendered by
-  `python-cqrs`' own `SagaMermaid` from the real step lists. Both are committed so
+  catalogue, drawn from `EVENT_TOPICS` and both consumer registries, with notes naming
+  the events consumed only inside their own context and the ones no consumer handles —
+  and `docs/diagrams/sagas.md` — the two orchestration sagas' step sequences, rendered
+  by `python-cqrs`' own `SagaMermaid` from the real step lists. Both are committed so
   GitHub renders them, and both are guarded by `tests/unit/docs`.
 - AsyncAPI channel titles for every subscription (`<topic> to <consumer group>`, plus
   a description naming the consumer). FastStream derives a channel key from the
@@ -69,7 +73,7 @@ rest is the phase-by-phase history.
   corruption policy).
 - `make coverage` — the full suite, an HTML report in `docs/coverage.html`, and the
   per-layer breakdown against its floors (domain 90%, application 80%, infrastructure
-  70%). `README.md` publishes the current numbers: 100% / 97% / 96%.
+  70%). `README.md` publishes the current numbers: 803 tests, 100% / 97% / 96%.
 - `tools/contracts.py --check` compares the generated documents and the checked-in
   diagrams with the code, so drift is a failing command rather than a review comment.
 - The contract-test suites `tests/unit/contracts/` (OpenAPI, both AsyncAPI documents,
