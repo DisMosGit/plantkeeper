@@ -1,11 +1,11 @@
 # Domain events
 
-> **Status:** Phase 2 — the catalogue below is exactly what `packages/domain`
-> implements (`tests/unit/domain/test_events_catalogue.py` guards it), and its
+> **Status:** Phase 3 — the catalogue below is exactly what `packages/domain`
+> implements (`tests/unit/domain/test_events_catalogue.py` guards it), its
 > transport is implemented in
-> [`packages/infrastructure/.../messaging/topics.py`](../packages/infrastructure/src/plantkeeper/infrastructure/messaging/topics.py).
-> The AsyncAPI document is Phase 10; the consumers column is the plan from
-> [`docs/architecture.md`](architecture.md).
+> [`packages/infrastructure/.../messaging/topics.py`](../packages/infrastructure/src/plantkeeper/infrastructure/messaging/topics.py),
+> and its first real consumers — the read side's projections — are described in
+> [`docs/cqrs.md`](cqrs.md). The AsyncAPI document is Phase 10.
 
 ## Event contract
 
@@ -63,6 +63,17 @@ producer holding global ordering.
 outbox row being marked published republishes it on the next poll, so every
 consumer must be idempotent on `(consumer_group, event_id)`. That is not an
 implementation detail of the relay: it is the contract each consumer signs.
+`read_analytics.processed_events` is how the read side keeps it; see
+[`docs/cqrs.md`](cqrs.md).
+
+**Consumers.** A consumer subscribes to a topic with a consumer group of its own
+and dispatches on the `event_name` header — a topic carries every event of its
+context, so most deliveries are somebody else's. The read side runs one group per
+projection (`<READ_SIDE_CONSUMER_GROUP_PREFIX>-garden`, `…-care`, `…-catalog`,
+`…-notifications`, `…-journal`) with `auto_offset_reset="earliest"`, which is what
+makes a rebuilt read table possible. A consumer that meets an unknown
+`event_name`, or a body that does not validate, logs it with the `event_id` and
+acknowledges it rather than blocking the partition behind a contract violation.
 
 **Failure handling.** `attempts` counts failed polls, not individual produce
 calls; `tenacity` retries a transient broker error three times inside one poll.
@@ -73,48 +84,52 @@ fails the row is retried instead, so no message is dropped silently. See
 
 ## Catalogue
 
+The consumers column names what exists today and what is still planned. The
+projections are the read side's, and each one is described in
+[`docs/cqrs.md`](cqrs.md).
+
 ### Garden
 
-| Event | Payload | Emitted by | Consumed by (planned) |
-|-------|---------|-----------|-----------------------|
-| `PlantAdded` | `plant_id`, `household_id`, `species_id`, `name`, `location`, `added_at` | `Plant` (`add`) | Care (OnboardPlantSaga), Analytics |
-| `PlantRemoved` | `plant_id`, `removed_at` | `Plant` (`remove`) | Care, Analytics |
-| `PlantMoved` | `plant_id`, `previous_location`, `location` | `Plant` (`move`) | Analytics |
-| `PlantOnboarded` | `plant_id`, `household_id`, `species_id`, `next_watering_at` | OnboardPlantSaga (Phase 4) | Notifications, Analytics |
+| Event | Payload | Emitted by | Consumed by |
+|-------|---------|-----------|-------------|
+| `PlantAdded` | `plant_id`, `household_id`, `species_id`, `name`, `location`, `added_at` | `Plant` (`add`) | `GardenProjection`; OnboardPlantSaga (Phase 4) |
+| `PlantRemoved` | `plant_id`, `removed_at` | `Plant` (`remove`) | `GardenProjection` |
+| `PlantMoved` | `plant_id`, `previous_location`, `location` | `Plant` (`move`) | `GardenProjection` |
+| `PlantOnboarded` | `plant_id`, `household_id`, `species_id`, `next_watering_at` | OnboardPlantSaga (Phase 4) | `GardenProjection`; Notifications (Phase 8) |
 
 ### Care
 
-| Event | Payload | Emitted by | Consumed by (planned) |
-|-------|---------|-----------|-----------------------|
-| `CareScheduleCreated` | `plant_id`, `watering_interval`, `next_watering_at` | `CareSchedule` (`create`) | Analytics |
-| `WateringDue` | `plant_id`, `due_at` | `CareSchedule` (`mark_due`) | Notifications, MissedCareSaga (Phase 4) |
-| `WateringCompleted` | `plant_id`, `completed_at`, `next_watering_at` | `CareSchedule` (`complete_watering`) | Journal, Analytics |
-| `WateringRescheduled` | `plant_id`, `previous_next_watering_at`, `next_watering_at`, `reason` | `CareSchedule` (`reschedule`), AdaptiveWateringSaga (Phase 4) | Notifications, Analytics |
-| `CareMissed` | `plant_id`, `next_watering_at` | `CareSchedule` (`mark_missed`), MissedCareSaga (Phase 4) | Notifications, Analytics |
-| `CareSkipped` | `plant_id`, `skipped_at`, `next_watering_at` | `CareSchedule` (`skip`) | Analytics |
+| Event | Payload | Emitted by | Consumed by |
+|-------|---------|-----------|-------------|
+| `CareScheduleCreated` | `plant_id`, `watering_interval`, `next_watering_at` | `CareSchedule` (`create`) | `CareProjection` |
+| `WateringDue` | `plant_id`, `due_at` | `CareSchedule` (`mark_due`) | MissedCareSaga (Phase 4); Notifications (Phase 8) |
+| `WateringCompleted` | `plant_id`, `completed_at`, `next_watering_at` | `CareSchedule` (`complete_watering`) | `CareProjection`; Journal (Phase 6) |
+| `WateringRescheduled` | `plant_id`, `previous_next_watering_at`, `next_watering_at`, `reason` | `CareSchedule` (`reschedule`), AdaptiveWateringSaga (Phase 4) | `CareProjection`; Notifications (Phase 8) |
+| `CareMissed` | `plant_id`, `next_watering_at` | `CareSchedule` (`mark_missed`), MissedCareSaga (Phase 4) | `CareProjection`; Notifications (Phase 8) |
+| `CareSkipped` | `plant_id`, `skipped_at`, `next_watering_at` | `CareSchedule` (`skip`) | `CareProjection` |
 
 ### Catalog
 
-| Event | Payload | Emitted by | Consumed by (planned) |
-|-------|---------|-----------|-----------------------|
-| `SpeciesSyncRequested` | *(no payload)* | Daily scheduler, `POST /api/v1/catalog/sync` (Phase 2) | SpeciesSyncSaga |
-| `SpeciesUpdated` | `species_id`, `scientific_name`, `common_name`, `watering_interval`, `light_requirement`, `version` | `Species` (`update`) | Garden read models, cache invalidation |
-| `SpeciesCacheInvalidated` | `species_id` | SpeciesSyncSaga (Phase 9) | Valkey species cache |
+| Event | Payload | Emitted by | Consumed by |
+|-------|---------|-----------|-------------|
+| `SpeciesSyncRequested` | *(no payload)* | Daily scheduler, `POST /api/v1/catalog/sync` (Phase 2) | SpeciesSyncSaga (Phase 4) |
+| `SpeciesUpdated` | `species_id`, `scientific_name`, `common_name`, `watering_interval`, `light_requirement`, `version` | `Species` (`update`) | `SpeciesProjection`; Valkey cache (Phase 9) |
+| `SpeciesCacheInvalidated` | `species_id` | SpeciesSyncSaga (Phase 9) | Valkey species cache (Phase 9) |
 
 ### Journal
 
-| Event | Payload | Emitted by | Consumed by (planned) |
-|-------|---------|-----------|-----------------------|
-| `JournalEntryAdded` | `entry_id`, `plant_id`, `entry_type`, `note`, `entry_occurred_at` | `JournalEntry` (`add`) | Journal projection, Analytics |
+| Event | Payload | Emitted by | Consumed by |
+|-------|---------|-----------|-------------|
+| `JournalEntryAdded` | `entry_id`, `plant_id`, `entry_type`, `note`, `entry_occurred_at` | `JournalEntry` (`add`) | `JournalProjection`; Analytics |
 
 `entry_occurred_at` is when the care happened; the inherited `occurred_at` is when
 the entry was recorded.
 
 ### Telemetry
 
-| Event | Payload | Emitted by | Consumed by (planned) |
-|-------|---------|-----------|-----------------------|
-| `TelemetryReceived` | `sensor_id`, `plant_id`, `recorded_at`, `moisture`, `temperature`, `light` | `Sensor` (`record`) | Care (AdaptiveWateringSaga), telemetry projection |
+| Event | Payload | Emitted by | Consumed by |
+|-------|---------|-----------|-------------|
+| `TelemetryReceived` | `sensor_id`, `plant_id`, `recorded_at`, `moisture`, `temperature`, `light` | `Sensor` (`record`) | Care (AdaptiveWateringSaga, Phase 4); telemetry projection (Phase 5) |
 | `SoilMoistureLow` | `sensor_id`, `plant_id`, `moisture`, `threshold` | `Sensor` (`record`) | Care, Notifications |
 | `SoilMoistureHigh` | `sensor_id`, `plant_id`, `moisture`, `threshold` | `Sensor` (`record`) | Care, Notifications |
 | `TemperatureAnomaly` | `sensor_id`, `plant_id`, `temperature`, `low_threshold`, `high_threshold` | `Sensor` (`record`) | Notifications, Care |
@@ -122,10 +137,10 @@ the entry was recorded.
 
 ### Notifications
 
-| Event | Payload | Emitted by | Consumed by (planned) |
-|-------|---------|-----------|-----------------------|
-| `NotificationCreated` | `notification_id`, `household_id`, `notification_type`, `payload`, `created_at` | `Notification` (`create`) | HTTP long polling (Phase 8), Analytics |
-| `NotificationRead` | `notification_id`, `household_id`, `read_at` | `Notification` (`mark_read`) | Analytics |
+| Event | Payload | Emitted by | Consumed by |
+|-------|---------|-----------|-------------|
+| `NotificationCreated` | `notification_id`, `household_id`, `notification_type`, `payload`, `created_at` | `Notification` (`create`) | `NotificationProjection`; HTTP long polling (Phase 8) |
+| `NotificationRead` | `notification_id`, `household_id`, `read_at` | `Notification` (`mark_read`) | `NotificationProjection` |
 
 ## Deliberate non-events
 
@@ -144,4 +159,14 @@ small and every event has a real cross-context consumer:
 ## Deferred to later phases
 
 - `SagaStarted`, `SagaCompleted`, `SagaFailed`, `SagaCompensated` — Phase 4.
+- Read models for telemetry, and the projections that would write them — Phase 5.
 - AsyncAPI document — Phase 10.
+
+## Read side
+
+The first consumers of this catalogue are the read side's projections: one Kafka
+consumer group per read model, each idempotent through
+`read_analytics.processed_events`. What each one consumes and writes, how to run
+it, and how to rebuild a read model from its topic are in
+[`docs/cqrs.md`](cqrs.md); the decisions are in
+[ADR 0004](adr/0004-read-side-projections.md).

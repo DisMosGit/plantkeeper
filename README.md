@@ -46,19 +46,23 @@ Requirements: Python 3.14+, [uv](https://docs.astral.sh/uv/), Docker with Compos
 ```bash
 uv sync --all-packages    # install the workspace
 make dev                  # start Kafka (KRaft), Postgres, Valkey, Redpanda Console
-make migrate              # apply the write schema (Alembic)
+make migrate              # apply the schemas (Alembic write_*, Django read_analytics)
 make api                  # FastAPI on http://localhost:8000 (OpenAPI at /docs)
 make workers              # the outbox relay, which publishes to Kafka
+make admin                # read side on http://localhost:8001/admin/ (projections + Django Admin)
 make lint                 # ruff + mypy + import-linter
 make test                 # pytest
 make clean                # stop infra and drop volumes
 ```
 
-The write side runs as two processes on purpose: `make api` answers HTTP and commits
-each command together with the events it produced into the outbox, and `make workers`
-runs the relay that publishes those events to Kafka. Nothing in the API process talks
-to the broker, so a slow Kafka cannot slow a request down. See
-[`docs/events.md`](docs/events.md) for the topic, header and key contract.
+The system runs as three processes on purpose. `make api` answers HTTP and commits
+each command together with the events it produced into the outbox; `make workers`
+runs the relay that publishes those events to Kafka; `make admin` consumes them
+into the `read_analytics` schema and serves Django Admin over it. Nothing in the
+API process talks to the broker, so a slow Kafka cannot slow a request down, and
+nothing in the read side reads a write schema. See
+[`docs/events.md`](docs/events.md) for the topic, header and key contract and
+[`docs/cqrs.md`](docs/cqrs.md) for the two sides.
 
 Local infrastructure endpoints:
 
@@ -68,6 +72,7 @@ Local infrastructure endpoints:
 | Postgres | `localhost:5432` (database/user/password: `plantkeeper`) |
 | Valkey | `localhost:6379` |
 | Redpanda Console | <http://localhost:8080> |
+| Django Admin (read side) | <http://localhost:8001/admin/> |
 
 Connection settings are documented in `.env.example`.
 
@@ -77,9 +82,23 @@ Connection settings are documented in `.env.example`.
 - [`docs/architecture.md`](docs/architecture.md) — bounded contexts, layers, data flow
 - [`docs/domain.md`](docs/domain.md) — ubiquitous language, aggregates, invariants
 - [`docs/events.md`](docs/events.md) — event catalogue and its Kafka transport
+- [`docs/cqrs.md`](docs/cqrs.md) — write schema, read schema, projections
 - [`docs/adr/`](docs/adr/) — architecture decision records
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — branches, commits, local workflow
 - [`CHANGELOG.md`](CHANGELOG.md) — release history
 - [`AGENTS.md`](AGENTS.md) — guidance for AI coding agents
 
-There is no authentication in this project, by design.
+The platform has no application authentication: the REST API takes no tokens and
+tracks no sessions, and no bounded context models a login. Django Admin is a local
+read-only view, so it renders as a single superuser that
+`plantkeeper.admin.dev_auth` selects automatically — there is no login form to
+reach. Set `DJANGO_AUTO_LOGIN_USER=` (empty) in `.env` to disable that and use
+Django's own login instead, creating the user once with:
+
+```bash
+uv run python apps/admin/manage.py createsuperuser
+```
+
+Django Admin's own tables (`auth_*`, `django_*`) live in the `public` schema and
+exist because the admin framework needs them; the platform's read models live in
+`read_analytics` and are written only by projections.

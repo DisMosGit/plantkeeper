@@ -106,7 +106,7 @@ model is declared on its own `registry().generate_base()`, so the project would 
 second declarative base beside `Base`. What `python-cqrs` genuinely provides —
 `PydanticRequest` / `PydanticResponse`, `RequestHandler`, `RequestMap`,
 `RequestMediator` and the Dishka container — is used as-is, and
-[ADR 0006](0006-why-python-cqrs.md) (Phase 10) records that split.
+[ADR 0007](0007-why-python-cqrs.md) (Phase 10) records that split.
 
 ## Consequences
 

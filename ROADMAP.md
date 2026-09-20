@@ -339,7 +339,7 @@
 - Задачи, которых не было в исходном плане: зависимости (`asyncpg`, `faststream[kafka]`, `pydantic-settings`, `tenacity`, `alembic`), `POST /api/v1/households`, таблица `write_shared.idempotency_keys`, `make api` / `make workers`, ADR 0003.
 - `POST /api/v1/catalog/sync` кладёт `SpeciesSyncRequested` в outbox напрямую; сага, которая его обработает, — Phase 4.
 - Значения value objects (`Location`, `Moisture`, …) уходят в JSON как скаляры (`"location": "Shelf"`), а не как `{"value": "Shelf"}`: контракт события не должен выдавать устройство домена (`fix(domain): serialise scalar value objects as their scalar`).
-- ADR последующих фаз переномерованы на +1: `0004-orchestration-vs-choreography` (Phase 4), `0005-rest-and-grpc` (Phase 8), `0006-why-python-cqrs`, `0007-outbox-pattern`, `0008-event-sourcing-journal` (Phase 10).
+- ADR последующих фаз переномерованы на +1 (см. отклонения Phase 3): `0005-orchestration-vs-choreography` (Phase 4), `0006-rest-and-grpc` (Phase 7), `0007-why-python-cqrs`, `0008-outbox-pattern`, `0009-event-sourcing-journal` (Phase 10).
 
 ---
 
@@ -348,42 +348,58 @@
 > **Цель:** проекции событий в read-схему, Django Admin как UI для чтения.
 > **Результат фазы:** созданное через REST растение видно в Django Admin.
 
+> **Статус:** ✅ выполнено — `apps/admin` читает события и пишет `read_analytics`,
+> `make lint && make test` зелёные (398 тестов, покрытие 98%), `make migrate`
+> применяет Alembic-схему и Django-схему, `make admin` поднимает read side на
+> :8001. Коммиты созданы локально, push в `origin` не выполнялся.
+
 ### 3.1. Django setup (ASGI)
-- [ ] `apps/admin/src/plantkeeper/admin/settings.py` (БД — read-схема, INSTALLED_APPS) · `M`
-- [ ] `manage.py` в `apps/admin/` · `S`
-- [ ] `asgi.py`: Starlette + Mount Django + FastStream lifespan · `M` 📝
-- [ ] `uv run python apps/admin/manage.py migrate` создаёт read-схему · `S`
-- [ ] Коммит: `feat(admin): asgi django setup` · `M`
+- [x] `apps/admin/src/plantkeeper/admin/settings.py` (БД — read-схема, INSTALLED_APPS) · `M`
+- [x] `manage.py` в `apps/admin/` · `S`
+- [x] `asgi.py`: Starlette + Mount Django + FastStream lifespan · `M` 📝
+- [x] `uv run python apps/admin/manage.py migrate` создаёт read-схему · `S`
+- [x] Коммит: `feat(admin): asgi django setup` · `M`
 
 ### 3.2. Read-модели (проекции)
-- [ ] Read-модель `PlantReadModel` (id, name, species_name, location, next_watering) · `M`
-- [ ] Read-модель `CareReadModel` · `M`
-- [ ] Read-модель `NotificationReadModel` · `M`
-- [ ] Read-модель `JournalReadModel` · `M`
-- [ ] Django-миграции для read-схемы · `M`
-- [ ] Коммит: `feat(admin): read models` · `L`
+- [x] Read-модель `PlantReadModel` (id, name, species_name, location, next_watering) · `M`
+- [x] Read-модель `CareReadModel` · `M`
+- [x] Read-модель `NotificationReadModel` · `M`
+- [x] Read-модель `JournalReadModel` · `M`
+- [x] Django-миграции для read-схемы · `M`
+- [x] Коммит: `feat(admin): read models` · `L`
 
 ### 3.3. Проекции (consumer'ы)
-- [ ] `PlantProjection` — слушает `PlantAdded`, `PlantRemoved`, `PlantOnboarded` · `M` 🧪
-- [ ] `CareProjection` — слушает `CareScheduleCreated`, `WateringCompleted`, `WateringRescheduled` · `M` 🧪
-- [ ] `NotificationProjection` — слушает `NotificationCreated` · `S` 🧪
-- [ ] `JournalProjection` — слушает `JournalEntryAdded` · `M` 🧪
-- [ ] Идемпотентность каждой проекции (по `event_id`) · `M` 🧪
-- [ ] Коммит: `feat(workers): projections` · `L`
+- [x] `PlantProjection` — слушает `PlantAdded`, `PlantRemoved`, `PlantOnboarded` · `M` 🧪
+- [x] `CareProjection` — слушает `CareScheduleCreated`, `WateringCompleted`, `WateringRescheduled` · `M` 🧪
+- [x] `NotificationProjection` — слушает `NotificationCreated` · `S` 🧪
+- [x] `JournalProjection` — слушает `JournalEntryAdded` · `M` 🧪
+- [x] Идемпотентность каждой проекции (по `event_id`) · `M` 🧪
+- [x] Коммит: `feat(admin): projections` · `L`
 
 ### 3.4. Django Admin UI
-- [ ] `PlantAdmin` (list_display: name, species, location, next_watering) · `M`
-- [ ] `CareAdmin`, `NotificationAdmin`, `JournalAdmin` · `M`
-- [ ] Фильтры и поиск · `S`
-- [ ] Inline-отображение журнала на странице растения · `M`
-- [ ] Коммит: `feat(admin): django admin ui` · `M`
+- [x] `PlantAdmin` (list_display: name, species, location, next_watering) · `M`
+- [x] `CareAdmin`, `NotificationAdmin`, `JournalAdmin` · `M`
+- [x] Фильтры и поиск · `S`
+- [x] Inline-отображение журнала на странице растения · `M`
+- [x] Коммит: `feat(admin): django admin ui` · `M`
 
 ### 3.5. E2E-тест CQRS
-- [ ] Тест: `POST /plants` → проекция → растение в read-модели · `M` 🧪
-- [ ] Тест: проекция идемпотентна (повторное событие не дублирует) · `M` 🧪
-- [ ] Коммит: `test(e2e): cqrs projection` · `M` 🧪
+- [x] Тест: `POST /plants` → проекция → растение в read-модели · `M` 🧪
+- [x] Тест: проекция идемпотентна (повторное событие не дублирует) · `M` 🧪
+- [x] Коммит: `test(e2e): cqrs projection` · `M` 🧪
 
 **✅ Phase 3 завершена, когда:** write → Kafka → projection → read-модель работает, растение видно в Django Admin.
+
+**Отклонения и уточнения:**
+- Задача 3.3 названа `feat(workers): projections`, но проекции живут в `apps/admin` и коммит называется `feat(admin): projections`. Причины: только в `apps/admin` есть Django, Starlette и FastStream одновременно; ROADMAP 3.1 требует FastStream lifespan именно в admin-процессе; контракт import-linter держит `plantkeeper.workers` и `plantkeeper.admin` независимыми, а воркер не имеет Django, чтобы писать read-модели. `apps/workers` остаётся relay'ем write-side. См. `docs/adr/0004-read-side-projections.md`.
+- `make migrate` теперь применяет обе схемы: Alembic (`write_*`) и Django (`read_analytics`). Схема read-side создаётся Django-миграцией, а не Alembic: владелец схемы — Django.
+- Добавлено сверх плана: `SpeciesReadModel` + `SpeciesProjection` (источник `plants.species_name`), обработка `PlantMoved` (иначе локация в админке устаревает), `CareSkipped`/`CareMissed` (иначе расписание устаревает после skip) и `NotificationRead` (иначе `read_at` не обновляется после ack); `EVENT_TYPES` в `topics.py`; таблица `read_analytics.processed_events`; middleware `DevAutoLoginMiddleware`; `conftest`-бутстрап Django на импорте.
+- Read-модель `plants` собирается из трёх топиков (garden, care, catalog), поэтому её garden-колонки nullable: событие care/journal может быть спроецировано раньше `PlantAdded`. Правило «один писатель на колонку» сохранено, а `update_or_create` не затирает чужие колонки.
+- В Phase 3 нет продюсеров у `CareScheduleCreated` (Phase 4), `JournalEntryAdded` (Phase 6) и `SpeciesUpdated` (Phase 9), поэтому эти проекции покрыты интеграционными тестами с прямыми событиями; e2e-путь проверяется на `PlantAdded`. Список непроецируемых событий зафиксирован тестом `test_the_projected_catalogue_is_accounted_for`.
+- `create_admin_application` — фабрика без модульного `application`: `uvicorn --factory`. Так тесты могут направить read side на свои контейнеры, а модуль не конфигурирует Django при импорте.
+- Тест `tests/e2e/test_write_side.py` теперь выбирает Kafka-сообщение по `event_id`: read-side e2e-тесты публикуют в тот же топик, и «первое `PlantAdded` в топике» перестало быть сообщением этого теста.
+- Зависимости: `psycopg[binary]` (бэкенд Django для Postgres) и `asgiref` (прямой `sync_to_async`) в `apps/admin`; mypy-оверрайды для `django.*` и `plantkeeper.admin.*`; исключение RUF012 для Django-моделей и миграций.
+- ADR последующих фаз переномерованы ещё на +1: `0005-orchestration-vs-choreography` (Phase 4), `0006-rest-and-grpc` (Phase 7), `0007-why-python-cqrs`, `0008-outbox-pattern`, `0009-event-sourcing-journal` (Phase 10).
 
 ---
 
@@ -435,7 +451,7 @@
 
 ### 4.6. Документация саг
 - [ ] `docs/sagas.md` — описание 4 саг с диаграммами (Mermaid sequence) · `L` 📝
-- [ ] ADR `0004-orchestration-vs-choreography.md` · `M` 📝
+- [ ] ADR `0005-orchestration-vs-choreography.md` · `M` 📝
 - [ ] Коммит: `docs: sagas description` · `M` 📝
 
 **✅ Phase 4 завершена, когда:** 4 саги покрыты тестами, `docs/sagas.md` заполнен.
@@ -554,7 +570,7 @@
 
 ### 7.4. Документация
 - [ ] `docs/grpc.md` — как запустить, как вызвать через grpcurl · `M` 📝
-- [ ] ADR `0005-rest-and-grpc.md` — почему оба протокола · `M` 📝
+- [ ] ADR `0006-rest-and-grpc.md` — почему оба протокола · `M` 📝
 - [ ] Коммит: `docs: grpc` · `M` 📝
 
 **✅ Phase 7 завершена, когда:** `grpcurl` из README работает, e2e-тест зелёный.
@@ -640,9 +656,9 @@
 ### 10.2. Документация
 - [ ] `docs/architecture.md` — полный BC map + sequence diagrams · `L` 📝
 - [ ] `docs/patterns.md` — таблица паттернов с ссылками на код · `M` 📝
-- [ ] ADR `0006-why-python-cqrs.md` · `M` 📝
-- [ ] ADR `0007-outbox-pattern.md` · `M` 📝
-- [ ] ADR `0008-event-sourcing-journal.md` · `M` 📝
+- [ ] ADR `0007-why-python-cqrs.md` · `M` 📝
+- [ ] ADR `0008-outbox-pattern.md` · `M` 📝
+- [ ] ADR `0009-event-sourcing-journal.md` · `M` 📝
 - [ ] Обновить `README.md` финальной диаграммой · `M` 📝
 - [ ] Коммит: `docs: architecture, patterns, ADRs` · `L` 📝
 

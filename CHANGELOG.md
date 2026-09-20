@@ -24,11 +24,22 @@ Versioning: [Semantic Versioning](https://semver.org/).
 - FastAPI write API: plants, households, care, sensors, catalog and notifications, with `Idempotency-Key` support on create endpoints and one uniform error body (`{"detail", "error"}`: 409 for a broken invariant or a reused key, 404 for a missing aggregate, 422 for a body that cannot become a value object).
 - `docs/adr/0003-write-side-outbox.md` and a transport section in `docs/events.md` (topics, body, headers, keys, delivery guarantees).
 - End-to-end test of the write side: `POST /api/v1/plants` → 201, the row in Postgres, the event in the outbox, the relay, and `PlantAdded` readable from Kafka with its contract.
+- Phase 3 read side: `apps/admin` is a Django application served by Starlette (`create_admin_application`) with a FastStream lifespan, its own `manage.py`, and a Django Admin whose local superuser is selected automatically (no login form).
+- `read_analytics` schema, owned by Django migration `read_models.0001_read_models`: `plants`, `care_schedules`, `species`, `notifications`, `journal_entries` and the `processed_events` idempotency ledger.
+- Five projections consuming Kafka inside the admin process — Garden, Care, Species, Notification and Journal — each with its own consumer group and idempotent on `(consumer_group, event_id)` in the same transaction as its writes.
+- `EVENT_TYPES` (and `event_type_for`) in `plantkeeper.infrastructure.messaging.topics`: the `event_name` → event class registry a consumer deserialises with.
+- Django Admin for every read model: filters, search, date drill-down, the journal inline on the plant page, read-only admins, and a browsable `processed_events` ledger.
+- `make admin` (read side on :8001) and `make admin-static`; `make migrate` now applies the Alembic write schema **and** the Django read schema.
+- `docs/cqrs.md`, `docs/adr/0004-read-side-projections.md`, and a read-side section in `docs/events.md`.
+- Tests: the projection contract and behaviour (`tests/integration/test_projections.py`, including the transaction rollback of a failed projection), the read-model settings (`tests/unit/admin/`), and the end-to-end write → Kafka → projection → Django Admin path (`tests/e2e/test_cqrs_read_side.py`).
 
 ### Changed
 - Scalar value objects (`Location`, `Moisture`, `Temperature`, `LightLevel`, the care intervals) now serialise as the scalar they wrap, so event payloads are flat (`"location": "Shelf"`) instead of nested (`"location": {"value": "Shelf"}`). Validation still accepts both shapes. Identifiers already behaved this way.
 - `make test` now runs the integration and end-to-end suites as well; the container fixtures are lazy, so `make test-unit` still needs no Docker.
 - Planned ADRs in `ROADMAP.md` are renumbered by one from Phase 4 onwards, because `docs/adr/0003-write-side-outbox.md` takes slot 3.
+- `Settings` gains `read_side_consumer_group_prefix`; the read side reads the same `.env` as the services.
+- `docs/events.md` lists each event's real consumer (the projections) instead of a planned one.
+- Mypy ignores `django.*` imports and relaxes `disallow_subclassing_any` for `plantkeeper.admin.*`, because Django ships no `py.typed`; Ruff's RUF012 is off for the Django models and migrations, whose declarative class attributes are mutable by design.
 
 ### Deprecated
 -
@@ -37,6 +48,7 @@ Versioning: [Semantic Versioning](https://semver.org/).
 -
 
 ### Fixed
+- `tests/e2e/test_write_side.py` picks its Kafka message by `event_id` instead of assuming it is the first `PlantAdded` on `garden.events`, which the read-side end-to-end tests made false.
 -
 
 ### Security
