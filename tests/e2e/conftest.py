@@ -13,9 +13,11 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import django
+import grpc
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from plantkeeper.api.grpc.server import run_grpc_server
 from plantkeeper.api.main import create_app
 from plantkeeper.infrastructure.config import Settings
 
@@ -100,3 +102,27 @@ async def worker_settings(
         monkeypatch, database=database, bootstrap_servers=kafka_bootstrap_servers
     )
     return settings.model_copy(update={"worker_consumer_group_prefix": f"test-worker-{uuid4()}"})
+
+
+@pytest.fixture
+async def grpc_port(database: str, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[int]:
+    """A running gRPC server on a free port, over an empty database.
+
+    The gRPC process builds no Kafka broker — it uses ``api_providers``, which
+    has no messaging provider — so the bootstrap address here is never dialled.
+    It is set anyway because ``Settings`` is constructed from the environment.
+    """
+    point_environment_at(monkeypatch, database=database, bootstrap_servers="localhost:9092")
+    async with run_grpc_server(host="127.0.0.1", port=0) as (_, bound_port):
+        yield bound_port
+
+
+@pytest.fixture
+async def grpc_channel(grpc_port: int) -> AsyncIterator[grpc.aio.Channel]:
+    """An async channel to the running server, ready for a generated stub."""
+    channel = grpc.aio.insecure_channel(f"127.0.0.1:{grpc_port}")
+    await channel.channel_ready()
+    try:
+        yield channel
+    finally:
+        await channel.close()
