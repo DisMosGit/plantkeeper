@@ -269,8 +269,9 @@ async def test_the_journal_inline_renders_on_the_plant_page(
             )
 
     assert detail.status_code == 200, detail.text
-    # Nothing publishes JournalEntryAdded before Phase 6, so the inline is present
-    # with its headings and no rows — which is exactly what the phase delivers.
+    # This plant was never watered, so the inline is present with its headings and no
+    # rows: the entry the roadmap asks for comes from a watering, which the journal
+    # flow test drives end to end.
     assert "Journal entries" in detail.text
 
 

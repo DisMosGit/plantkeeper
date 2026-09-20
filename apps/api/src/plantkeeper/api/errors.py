@@ -12,7 +12,11 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
-from plantkeeper.application.errors import IdempotencyKeyConflictError, NotFoundError
+from plantkeeper.application.errors import (
+    ConcurrentWriteError,
+    IdempotencyKeyConflictError,
+    NotFoundError,
+)
 from plantkeeper.domain.base import DomainError
 
 
@@ -39,6 +43,17 @@ async def idempotency_conflict_handler(request: Request, exc: Exception) -> JSON
     return _problem(status_code=status.HTTP_409_CONFLICT, exc=exc)
 
 
+async def concurrent_write_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Losing a race for a unique key is a conflict, not a bug.
+
+    The write side translates its own optimistic-lock failures — an idempotency key
+    claimed twice, an event-store version appended twice — into
+    :class:`ConcurrentWriteError`, and this is where that promise becomes a status a
+    client can act on instead of a 500.
+    """
+    return _problem(status_code=status.HTTP_409_CONFLICT, exc=exc)
+
+
 async def value_object_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """A body that cannot become a value object is unprocessable."""
     assert isinstance(exc, ValidationError)
@@ -57,4 +72,5 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(DomainError, domain_error_handler)
     app.add_exception_handler(NotFoundError, not_found_handler)
     app.add_exception_handler(IdempotencyKeyConflictError, idempotency_conflict_handler)
+    app.add_exception_handler(ConcurrentWriteError, concurrent_write_handler)
     app.add_exception_handler(ValidationError, value_object_error_handler)

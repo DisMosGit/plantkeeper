@@ -68,6 +68,8 @@ EXPECTED_API_SURFACE: dict[str, set[str]] = {
     "/api/v1/catalog/species": {"get"},
     "/api/v1/catalog/species/{species_id}": {"get"},
     "/api/v1/catalog/sync": {"post"},
+    "/api/v1/journal/{plant_id}": {"get"},
+    "/api/v1/journal/{plant_id}/at": {"get"},
     "/api/v1/notifications/pending": {"get"},
     "/api/v1/notifications/{notification_id}/ack": {"post"},
 }

@@ -8,6 +8,7 @@ from plantkeeper.api.rest.routers import (
     care,
     catalog,
     households,
+    journal,
     notifications,
     plants,
     sensors,
@@ -22,5 +23,6 @@ def build_api_router() -> APIRouter:
     router.include_router(care.router)
     router.include_router(sensors.router)
     router.include_router(catalog.router)
+    router.include_router(journal.router)
     router.include_router(notifications.router)
     return router
