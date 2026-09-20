@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from cqrs.response import PydanticResponse
-from pydantic import AwareDatetime, ConfigDict
+from pydantic import AwareDatetime, ConfigDict, JsonValue
 
 from plantkeeper.domain.care.schedule import CareSchedule
 from plantkeeper.domain.catalog.species import Species
@@ -184,6 +184,7 @@ class NotificationView(PydanticResponse):
     notification_id: NotificationId
     household_id: HouseholdId
     notification_type: NotificationType
+    payload: dict[str, JsonValue]
     created_at: AwareDatetime
     read_at: AwareDatetime | None
 
@@ -194,6 +195,7 @@ class NotificationView(PydanticResponse):
             notification_id=notification.id,
             household_id=notification.household_id,
             notification_type=notification.notification_type,
+            payload=notification.payload,
             created_at=notification.created_at,
             read_at=notification.read_at,
         )

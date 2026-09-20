@@ -571,6 +571,7 @@ async def test_pending_notifications_are_listed_and_acknowledged(
     )
     assert pending.status_code == 200
     assert [item["notification_id"] for item in pending.json()["items"]] == [notification_id]
+    assert pending.json()["items"][0]["payload"] == notification.payload
 
     acknowledged = await api_client.post(f"/api/v1/notifications/{notification_id}/ack")
     assert acknowledged.status_code == 200, acknowledged.text
@@ -579,8 +580,9 @@ async def test_pending_notifications_are_listed_and_acknowledged(
     after = await api_client.get(
         "/api/v1/notifications/pending", params={"household_id": household_id}
     )
-    assert after.status_code == 200
-    assert after.json()["items"] == []
+    # Nothing pending is answered as 204, whether or not the caller was willing
+    # to wait (Phase 8 replaced the empty collection).
+    assert after.status_code == 204
 
     twice = await api_client.post(f"/api/v1/notifications/{notification_id}/ack")
     assert twice.status_code == 409

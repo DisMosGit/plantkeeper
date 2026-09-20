@@ -17,6 +17,7 @@ from dishka.integrations.fastapi import inject
 from fastapi import Depends, Request
 
 from plantkeeper.api.mediator import build_mediator
+from plantkeeper.application.ports.notifications import NotificationChannel
 
 
 @inject
@@ -31,3 +32,20 @@ async def get_mediator(
 
 Mediator = Annotated[RequestMediator, Depends(get_mediator)]
 """The mediator, as a route parameter type."""
+
+
+@inject
+async def get_notification_channel(
+    channel: FromDishka[NotificationChannel],
+) -> NotificationChannel:
+    """Resolve the process's presence channel through its port.
+
+    A dependency rather than a direct ``FromDishka`` parameter on the route: the
+    router then depends on the application-layer port, and the adapter that
+    satisfies it is chosen in the container.
+    """
+    return channel
+
+
+NotificationChannelDep = Annotated[NotificationChannel, Depends(get_notification_channel)]
+"""The notification channel, as a route parameter type."""

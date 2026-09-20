@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 
 from plantkeeper.application.views import CollectionView, NotificationView
 from plantkeeper.domain.notifications.values import NotificationType
@@ -17,6 +17,7 @@ class NotificationResponse(BaseModel):
     notification_id: UUID
     household_id: UUID
     notification_type: NotificationType
+    payload: dict[str, JsonValue]
     created_at: datetime
     read_at: datetime | None
 
@@ -27,6 +28,7 @@ class NotificationResponse(BaseModel):
             notification_id=view.notification_id.value,
             household_id=view.household_id.value,
             notification_type=view.notification_type,
+            payload=view.payload,
             created_at=view.created_at,
             read_at=view.read_at,
         )
