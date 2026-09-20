@@ -755,33 +755,95 @@
 > **Цель:** gRPC API для Care на том же application-слое.
 > **Результат фазы:** gRPC-клиент может вызвать `GetTodayCare`.
 
+> **Статус:** ✅ выполнено — `plantkeeper.v1.CareService` (`GetTodayCare`,
+> `CompleteWatering`) и `plantkeeper.v1.GardenService` (`ListPlants`, `GetPlant`)
+> обслуживаются `make grpc` на `0.0.0.0:50051` вместе с health-check'ом и
+> reflection; оба протокола идут через один и тот же mediator. Стабы генерирует
+> `make proto` (`tools/protogen.py`, `grpcio-tools`), он же — предпосылка
+> `lint`/`test`/`test-unit`/`test-e2e`. `make lint` чист, `make test` — 648
+> тестов (unit + integration + e2e на testcontainers), покрытие 96%. Коммиты
+> созданы локально, push в `origin` не выполнялся.
+
 ### 7.1. Protobuf definitions
-- [ ] `proto/plantkeeper/v1/care.proto` (CareService: GetTodayCare, CompleteWatering) · `M`
-- [ ] `proto/plantkeeper/v1/garden.proto` (GardenService: ListPlants, GetPlant) · `M`
-- [ ] `proto/plantkeeper/v1/common.proto` (общие типы: PlantId, SensorReading) · `M`
-- [ ] `buf` конфиг или `grpcio-tools` Make-таргет · `M`
-- [ ] Генерация Python-стабов в `apps/api/src/.../grpc/generated/` · `M`
-- [ ] Коммит: `feat(proto): care and garden services` · `M`
+- [x] `proto/plantkeeper/v1/care.proto` (CareService: GetTodayCare, CompleteWatering) · `M`
+- [x] `proto/plantkeeper/v1/garden.proto` (GardenService: ListPlants, GetPlant) · `M`
+- [x] `proto/plantkeeper/v1/common.proto` (общие типы: PlantId, SensorReading) · `M`
+- [x] `buf` конфиг или `grpcio-tools` Make-таргет · `M`
+- [x] Генерация Python-стабов в `apps/api/src/.../grpc/generated/` · `M`
+- [x] Коммит: `feat(proto): care and garden services` · `M`
 
 ### 7.2. gRPC server
-- [ ] `CareServicer` (grpc.aio) — вызывает QueryBus/CommandBus · `M` 🧪
-- [ ] `GardenServicer` · `M` 🧪
-- [ ] `server.py` — точка входа, DI, graceful shutdown · `M`
-- [ ] Health-check (`grpc.health.v1.Health`) · `S` 🧪
-- [ ] Reflection (для grpcurl) · `S`
-- [ ] Коммит: `feat(api): grpc server` · `L` 🧪
+- [x] `CareServicer` (grpc.aio) — вызывает QueryBus/CommandBus · `M` 🧪
+- [x] `GardenServicer` · `M` 🧪
+- [x] `server.py` — точка входа, DI, graceful shutdown · `M`
+- [x] Health-check (`grpc.health.v1.Health`) · `S` 🧪
+- [x] Reflection (для grpcurl) · `S`
+- [x] Коммит: `feat(api): grpc server` · `L` 🧪
 
 ### 7.3. gRPC-клиент для тестов
-- [ ] Async gRPC client stub в `tests/` · `M` 🧪
-- [ ] E2E-тест: gRPC `GetTodayCare` → правильный ответ · `M` 🧪
-- [ ] Коммит: `test(e2e): grpc care service` · `M` 🧪
+- [x] Async gRPC client stub в `tests/` · `M` 🧪
+- [x] E2E-тест: gRPC `GetTodayCare` → правильный ответ · `M` 🧪
+- [x] Коммит: `test(e2e): grpc care service` · `M` 🧪
 
 ### 7.4. Документация
-- [ ] `docs/grpc.md` — как запустить, как вызвать через grpcurl · `M` 📝
-- [ ] ADR `0006-rest-and-grpc.md` — почему оба протокола · `M` 📝
-- [ ] Коммит: `docs: grpc` · `M` 📝
+- [x] `docs/grpc.md` — как запустить, как вызвать через grpcurl · `M` 📝
+- [x] ADR `0006-rest-and-grpc.md` — почему оба протокола · `M` 📝
+- [x] Коммит: `docs: grpc` · `M` 📝
 
 **✅ Phase 7 завершена, когда:** `grpcurl` из README работает, e2e-тест зелёный.
+
+**Отклонения и уточнения:**
+- **`buf` не используется, только `grpcio-tools`.** buf — второй бинарь, который
+  пришлось бы ставить и пинить отдельно; `grpcio-tools` — уже питоновский тулинг и
+  лежит в dev-группе рядом с Alembic. Причины и последствия — ADR 0006.
+- **Стабы не коммитятся, и один их импорт переписывается.** protoc выводит путь
+  модуля из пути proto-файла относительно include root, поэтому
+  `plantkeeper/v1/common.proto` становится `plantkeeper.v1.common_pb2`, а соседние
+  модули импортируют его как `from plantkeeper.v1 import common_pb2`. Стабы лежат
+  в `plantkeeper.api.grpc.generated`, и `tools/protogen.py` переписывает этот
+  префикс на реальный путь пакета. Опции для такого маппинга у protoc нет
+  (`--python_opt=M...` `grpc_tools.protoc` отвергает), а `sys.modules`-алиас
+  скрывал бы подмену; правка сгенерированного файла — честный минимальный способ.
+- **`proto/` — контракт, но mypy его стабы не проверяет.** `grpcio` и `protobuf`
+  не поставляют `py.typed`, поэтому strict-сборка видит их границы как `Any`
+  (оверрайды `grpc.*`, `grpc_health.*`, `grpc_reflection.*`, `google.protobuf.*`),
+  а сгенерированным модулям выставлен `ignore_errors`; аннотации вокруг этих
+  границ — ручные. Компилируемый `--pyi_out` при этом типизирует все message-типы,
+  которыми пользуются сервисеры.
+- **Общий мост REST и gRPC вынесен в `plantkeeper.api.mediator`.** `build_mediator`
+  и `view_of` переехали из FastAPI-зависимости `deps.py` (в нём осталась только
+  `get_mediator`/`Mediator`), чтобы оба протокола конструировали mediator и
+  проверяли обещанный тип ответа одним и тем же кодом.
+- **Своя таблица gRPC-статусов.** В REST-слое ошибки отображаются в HTTP-статусы;
+  для gRPC добавлен `plantkeeper.api.grpc.errors`: `NotFoundError` → `NOT_FOUND`,
+  `IdempotencyKeyConflictError` → `ALREADY_EXISTS`, `ConcurrentWriteError` →
+  `ABORTED`, `DomainError` → `FAILED_PRECONDITION`, `ValidationError` (кривое
+  значение от клиента) → `INVALID_ARGUMENT`, всё остальное → `INTERNAL`. Разбор
+  идентификатора выполняется *внутри* области отображения ошибок — иначе кривой
+  UUID падал бы в `UNKNOWN`.
+- **`SkipWatering` RPC не добавлен.** 7.1–7.2 называют для Care только
+  `GetTodayCare` и `CompleteWatering`; пропуск полива остаётся на REST.
+- **Сервер — отдельный процесс на `0.0.0.0:50051`.** Как `make api` (8000) и
+  `make admin` (8001), порт — модульные константы в `grpc/server.py`, `Settings`
+  не менялся. Процесс переиспользует `api_providers()` и, как REST-процесс, не
+  строит Kafka-брокер: команды коммитят события в outbox, публикует их relay.
+- **`SensorReading` есть в `common.proto`, но RPC его пока не отдаёт.** Роадмап
+  7.1 называет его общим типом; чтобы он не был мёртвым, контрактный тест
+  собирает и сериализует его. Поверхность телеметрии — задача более поздней фазы.
+- **Клиент для тестов — фикстуры плюс сгенерированные стабы, а не библиотека.**
+  7.3 просит «async gRPC client stub в `tests/`»: в `tests/e2e/conftest.py`
+  появились `grpc_port` (сервер на свободном порту, Postgres-контейнер, без Kafka)
+  и `grpc_channel`, а сами стабы — `CareServiceStub`/`GardenServiceStub` из
+  `generated/`.
+- **`make proto` — предпосылка `lint`/`test`/`test-unit`/`test-e2e`/`grpc`.**
+  В свежем клоне стабов нет (они в `.gitignore`), и без этого шага импорт упал бы;
+  Makefile делает шаг явным, а не прячет его в conftest.
+- **Новые зависимости:** `protobuf` (рантайм сгенерированных модулей — `grpcio`
+  его не тянет), `grpcio-health-checking`, `grpcio-reflection` в `apps/api`;
+  `grpcio-tools` — в dev-группу корня, как Alembic.
+- ADR 0006 использован по номеру, зарезервированному с Phase 2; нумерация
+  последующих не менялась: `0007-why-python-cqrs`, `0008-outbox-pattern`,
+  `0009-event-sourcing-journal` (Phase 10).
 
 ---
 
