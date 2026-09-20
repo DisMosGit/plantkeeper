@@ -1,0 +1,26 @@
+"""Errors the application layer raises on its own behalf.
+
+Domain errors come from the aggregates and say "a business rule was broken".
+The errors here say something about a *use case*: the aggregate a handler was
+asked to work on does not exist, or a client replayed an idempotency key with a
+different request body. The API layer maps both kinds onto HTTP statuses.
+"""
+
+from __future__ import annotations
+
+
+class ApplicationError(Exception):
+    """Base class for every use-case failure that is not a domain error."""
+
+
+class NotFoundError(ApplicationError):
+    """The aggregate a command or query refers to does not exist."""
+
+
+class IdempotencyKeyConflictError(ApplicationError):
+    """An idempotency key was reused with a different request body.
+
+    Replaying a request with the *same* body must return the original response;
+    replaying it with a different body is a client bug, and silently treating it
+    as the original request would hide it.
+    """
