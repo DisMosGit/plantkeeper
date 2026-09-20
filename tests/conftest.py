@@ -19,6 +19,7 @@ import socket
 import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from urllib.parse import urlparse
 
 import pytest
 from aiokafka.admin import AIOKafkaAdminClient
@@ -128,6 +129,68 @@ async def database(migrated_database: str) -> str:
     finally:
         await engine.dispose()
     return migrated_database
+
+
+# -----------------------------------------------------------------------------
+# Django (the read side)
+# -----------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def django_ready(postgres_dsn: str) -> Iterator[None]:
+    """Point Django at the session's container and apply its migrations.
+
+    ``django.setup()`` itself has already happened by the time this runs: pytest
+    imports a test module before it runs any fixture, and importing a read model
+    needs the app registry — so ``tests/integration/conftest.py`` and
+    ``tests/e2e/conftest.py`` configure Django at import time (see the comment
+    there). Nothing connects during ``setup()``, which is what makes it safe to
+    re-point ``DATABASES`` here: the first connection is created on first use,
+    after this fixture has run.
+    """
+    from django.conf import settings
+    from django.core.management import call_command
+
+    parsed = urlparse(postgres_dsn)
+    assert parsed.username and parsed.password and parsed.hostname and parsed.port
+    settings.DATABASES["default"].update(
+        {
+            "NAME": parsed.path.lstrip("/"),
+            "USER": parsed.username,
+            "PASSWORD": parsed.password,
+            "HOST": parsed.hostname,
+            "PORT": str(parsed.port),
+        }
+    )
+    call_command("migrate", interactive=False, verbosity=0)
+    yield
+
+
+def truncate_read_models() -> None:
+    """Empty every ``read_analytics`` table in one statement.
+
+    Built from Django's app registry rather than a list, so a model added to the
+    read side cannot quietly survive between tests.
+    """
+    from django.apps import apps
+    from django.db import connection
+
+    models = apps.get_app_config("read_models").get_models()
+    tables = ", ".join(model._meta.db_table for model in models)
+    with connection.cursor() as cursor:
+        cursor.execute(f"TRUNCATE {tables} CASCADE")
+
+
+@pytest.fixture
+def read_side_database(django_ready: None) -> str:
+    """A migrated database whose read models are empty.
+
+    Synchronous on purpose: Django's ORM and ``transaction.atomic`` are, and the
+    projection tests are plain functions that call the same code the consumer
+    calls.
+    """
+    truncate_read_models()
+    return ""
 
 
 # -----------------------------------------------------------------------------

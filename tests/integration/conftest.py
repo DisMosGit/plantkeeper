@@ -7,10 +7,22 @@ integration-specific wiring.
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 
+import django
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+# Django is configured at import time, before pytest imports the test modules:
+# a read model cannot be defined until ``INSTALLED_APPS`` is loaded, and pytest
+# imports a module before running any fixture. No connection is opened here — the
+# database named is whatever the environment says — and the ``django_ready``
+# fixture re-points ``DATABASES`` at the session's container before the first
+# query, which is why ``make test-unit`` still touches neither Django nor Docker:
+# this file is only imported for the integration suite.
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "plantkeeper.admin.settings")
+django.setup()
 
 
 @pytest.fixture

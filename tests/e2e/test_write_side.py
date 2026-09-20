@@ -91,12 +91,13 @@ async def publish_the_outbox(settings: Settings) -> None:
     assert failed == 0, "the relay could not publish every pending message"
 
 
-async def consume_event(bootstrap_servers: str, topic: str, event_name: str) -> Any:
-    """Return the first ``event_name`` message on ``topic``, or fail.
+async def consume_event(bootstrap_servers: str, topic: str, event_name: str, event_id: str) -> Any:
+    """Return the ``event_id`` message of ``event_name`` on ``topic``, or fail.
 
-    The topic carries every event of its context, and this suite's earlier
-    requests have already produced some of them, so the wanted message is picked
-    out by its header instead of being assumed to be first.
+    The topic carries every event of its context, and the suite shares one broker
+    with the read-side tests, so earlier tests have already published messages of
+    the same name. The wanted one is picked out by its ``event_id`` header instead
+    of being assumed to be first.
     """
     consumer = AIOKafkaConsumer(
         topic,
@@ -113,12 +114,17 @@ async def consume_event(bootstrap_servers: str, topic: str, event_name: str) -> 
             for group in batches.values():
                 for message in group:
                     headers = {name: value.decode() for name, value in message.headers}
-                    if headers.get("event_name") == event_name:
+                    if (
+                        headers.get("event_name") == event_name
+                        and headers.get("event_id") == event_id
+                    ):
                         return message
     finally:
         await consumer.stop()
 
-    pytest.fail(f"no {event_name} message arrived on {topic} within {CONSUME_TIMEOUT_MS} ms")
+    pytest.fail(
+        f"no {event_name} ({event_id}) message arrived on {topic} within {CONSUME_TIMEOUT_MS} ms"
+    )
 
 
 async def plant_count(database: str) -> int:
@@ -280,7 +286,9 @@ async def test_creating_a_plant_publishes_plant_added(
 
     await publish_the_outbox(Settings())
 
-    message = await consume_event(kafka_bootstrap_servers, GARDEN_EVENTS, "PlantAdded")
+    message = await consume_event(
+        kafka_bootstrap_servers, GARDEN_EVENTS, "PlantAdded", str(plant_message.event_id)
+    )
     headers = {name: value.decode() for name, value in message.headers}
     payload: dict[str, Any] = json.loads(message.value)
 
