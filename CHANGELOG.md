@@ -7,6 +7,75 @@ Versioning: [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+-
+
+### Changed
+-
+
+### Deprecated
+-
+
+### Removed
+-
+
+### Fixed
+-
+
+### Security
+-
+
+## [0.1.0] — 2026-09-21
+
+The first release: every roadmap phase is implemented. The Phase 10 entries come
+first in each section because they describe the final shape of the repository; the
+rest is the phase-by-phase history.
+
+### Added
+- Phase 10 contracts, generated from the code and never hand-written:
+  `plantkeeper.api.openapi` exports `docs/openapi.json` — the same document FastAPI
+  serves at `/docs`, built without a running process — and
+  `plantkeeper.workers.asyncapi` / `plantkeeper.admin.asyncapi` export the two
+  processes' Kafka subscriptions as AsyncAPI 3.0. `make contracts` runs all three;
+  `uv run python tools/contracts.py --check` fails when a checked-in diagram is stale.
+- The `x-plantkeeper-event-catalogue` extension on both AsyncAPI documents: every one
+  of the 26 events with its topic, producer and consumers, derived from `EVENT_TOPICS`
+  and the consumer registries. It exists because the write side's producers are the
+  outbox relay, not FastStream routes, so a generated AsyncAPI document on its own
+  cannot name them.
+- `plantkeeper.infrastructure.contracts` — the derivations every document and diagram
+  is built from (`catalogue.py`: the catalogue rows, the event-flow edge set and the
+  saga sequences; `diagrams.py`: the two checked-in files' text).
+- `tools/contracts.py` and the `make contracts` / `make diagrams` targets. The two
+  AsyncAPI documents are generated in child processes each, because the read side
+  needs Django configured and the write side must not import it.
+- `docs/diagrams/event-flow.md` — the producer/consumer topology of the event
+  catalogue, drawn from `EVENT_TOPICS` and the consumer registries — and
+  `docs/diagrams/sagas.md` — the two orchestration sagas' step sequences, rendered by
+  `python-cqrs`' own `SagaMermaid` from the real step lists. Both are committed so
+  GitHub renders them, and both are guarded by `tests/unit/docs`.
+- AsyncAPI channel titles for every subscription (`<topic> to <consumer group>`, plus
+  a description naming the consumer). FastStream derives a channel key from the
+  handler's function name when it has no title, and every handler here is called
+  `handle` — without the titles, several groups on one topic collapse into a single
+  channel and the document silently loses all but the last.
+- `docs/patterns.md` — every pattern the platform uses, from bounded contexts to
+  contract generation, each linked to the code that carries it, plus the deliberate
+  non-patterns and the generated-artefact table.
+- ADRs `0007-why-python-cqrs.md` (what is taken from the library, what is replaced,
+  and why), `0008-outbox-pattern.md` (the outbox end to end: the producing half,
+  the two consumer ledgers, the derived identifiers and the offset policy) and
+  `0009-event-sourcing-journal.md` (why only the Journal is event-sourced, the unique
+  `(stream_id, version)` as the optimistic lock, what a snapshot is for, and the
+  corruption policy).
+- `make coverage` — the full suite, an HTML report in `docs/coverage.html`, and the
+  per-layer breakdown against its floors (domain 90%, application 80%, infrastructure
+  70%). `README.md` publishes the current numbers: 100% / 97% / 96%.
+- `tools/contracts.py --check` compares the generated documents and the checked-in
+  diagrams with the code, so drift is a failing command rather than a review comment.
+- The contract-test suites `tests/unit/contracts/` (OpenAPI, both AsyncAPI documents,
+  including a warning-as-error check for the channel-collision failure) and
+  `tests/unit/docs/` (the two diagrams).
+- Phase 9 Trefle ACL: `plantkeeper.infrastructure.external.trefle` holds the wire models (`TrefleListResponse`, `TrefleSpeciesDetail`, `TrefleGrowth`), the mapping into domain values, and `TrefleClient` — the paginating client that reads `/species` and then one detail per species, wraps every request in an `aiolimiter` limiter (`TREFLE_REQUESTS_PER_MINUTE`, default 55), retries transient failures with `tenacity`, and translates HTTP failures into `TrefleAuthError`/`TrefleRecordMissingError`/`TrefleUnavailableError`.
 - Phase 0 skeleton: uv workspace, monorepo layout, docker-compose (Kafka KRaft, Postgres, Valkey).
 - Base `pyproject.toml` for all packages and apps.
 - Shared configs: Ruff, Mypy strict, pytest-asyncio, pre-commit.
@@ -80,6 +149,13 @@ Versioning: [Semantic Versioning](https://semver.org/).
 - Tests: the breaker's state machine over a movable clock, the mapping and the wire models, the client's pagination/retry/auth/404/breaker behaviour over `httpx.MockTransport`, the source's fallback, and the cache over a Valkey double (unit); the cache against a real Valkey, the cache consumer's ledger, the synchronisation's creation and its compensation, and the `SpeciesAdded` projection (integration); and the manual `POST /catalog/sync` → Trefle → 30 species → cache invalidation path end to end (`tests/e2e/test_catalog_sync.py`).
 
 ### Changed
+- `docs/architecture.md` is the finished runtime view: the bounded-context table, the full context map (with ACL and event-carried state transfer), and sequence diagrams for the write path, the read path, the telemetry path and the saga path. The Phase 3 placeholder that was glued to the next heading is gone.
+- `docs/patterns.md` and the ADR table in `README.md` are the entry points into the decisions; `README.md` also carries the final architecture flowchart, the `make contracts` / `make coverage` commands and the per-layer coverage numbers.
+- `docs/sagas.md` and `docs/events.md` lost their Phase 4 "known limitations" that Phases 5, 8 and 9 resolved (no telemetry producer, placeholder Trefle source and cache), and gained the ones that are still true (no upstream species removal, `SensorOffline` without a producer).
+- `docs/event-sourcing.md`, `docs/events.md` and ADR 0002 no longer announce Phase 10 work; they link to the ADR, the generated documents and the generated diagrams instead.
+- `apps/workers`' consumer subscriptions and `apps/admin`'s projections gain AsyncAPI channel titles and descriptions. The runtime behaviour is unchanged; the generated documents are the difference.
+- `plantkeeper.api.main` owns `VERSION` (the served OpenAPI `info.version`), and `plantkeeper.api.openapi` re-exports it, so the served document and the exported artefact cannot disagree.
+- `docs/events.md` no longer carries a "Deferred to later phases" section: what remains is deferred permanently or is a recorded limitation.
 - Scalar value objects (`Location`, `Moisture`, `Temperature`, `LightLevel`, the care intervals) now serialise as the scalar they wrap, so event payloads are flat (`"location": "Shelf"`) instead of nested (`"location": {"value": "Shelf"}`). Validation still accepts both shapes. Identifiers already behaved this way.
 - `GET /api/v1/notifications/pending` answers `204 No Content` where it used to answer `200 {"items": []}`; a long poll has one way of saying "nothing", and the empty collection is gone.
 - The `care_missed` notification moved from `MissedCareSaga` to `NotificationConsumer`: the saga owns the schedule and the grace window, and the Notifications context owns what the household sees. One producer per notification type.
