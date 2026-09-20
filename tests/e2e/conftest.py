@@ -34,7 +34,7 @@ django.setup()
 
 
 def point_environment_at(
-    monkeypatch: pytest.MonkeyPatch, *, database: str, bootstrap_servers: str
+    monkeypatch: pytest.MonkeyPatch, *, database: str, bootstrap_servers: str, valkey_url: str = ""
 ) -> Settings:
     """Point the environment at the containers and return what that means.
 
@@ -50,6 +50,10 @@ def point_environment_at(
     monkeypatch.setenv("POSTGRES_PORT", str(parsed.port))
     monkeypatch.setenv("POSTGRES_DB", parsed.path.lstrip("/"))
     monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", bootstrap_servers)
+    if valkey_url:
+        # Only the long poll and the notification pusher talk to Valkey, so a
+        # test that runs neither leaves the variable alone and needs no container.
+        monkeypatch.setenv("VALKEY_URL", valkey_url)
     return Settings()
 
 
@@ -57,10 +61,16 @@ def point_environment_at(
 async def api_client(
     database: str,
     kafka_bootstrap_servers: str,
+    valkey_url: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[AsyncClient]:
     """An HTTP client speaking to the real application over an empty database."""
-    point_environment_at(monkeypatch, database=database, bootstrap_servers=kafka_bootstrap_servers)
+    point_environment_at(
+        monkeypatch,
+        database=database,
+        bootstrap_servers=kafka_bootstrap_servers,
+        valkey_url=valkey_url,
+    )
     app = create_app()
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app)
@@ -90,16 +100,21 @@ async def read_side_settings(
 async def worker_settings(
     database: str,
     kafka_bootstrap_servers: str,
+    valkey_url: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> Settings:
     """Settings for the write-side workers, on consumer groups of their own.
 
     Fresh groups for the same reason as the read side: the shared broker may
     already hold offsets for the default prefix, and a group that resumed from
-    them would never see what this test publishes.
+    them would never see what this test publishes. The worker is pointed at the
+    Valkey container because ``NotificationPusher`` publishes nudges there.
     """
     settings = point_environment_at(
-        monkeypatch, database=database, bootstrap_servers=kafka_bootstrap_servers
+        monkeypatch,
+        database=database,
+        bootstrap_servers=kafka_bootstrap_servers,
+        valkey_url=valkey_url,
     )
     return settings.model_copy(update={"worker_consumer_group_prefix": f"test-worker-{uuid4()}"})
 
