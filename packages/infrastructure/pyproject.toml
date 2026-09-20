@@ -1,0 +1,25 @@
+[project]
+name = "plantkeeper-infrastructure"
+version = "0.1.0"
+description = "Infrastructure: persistence, messaging, external ACLs, cache, DI."
+requires-python = ">=3.14"
+dependencies = [
+    "plantkeeper-application",
+    "plantkeeper-domain",
+    "aiokafka>=0.14",
+    "dishka>=1.10",
+    "httpx>=0.28",
+    "sqlalchemy[asyncio]>=2.0.54",
+    "valkey>=6.1",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "plantkeeper.infrastructure"
+
+[tool.uv.sources]
+plantkeeper-application = { workspace = true }
+plantkeeper-domain = { workspace = true }

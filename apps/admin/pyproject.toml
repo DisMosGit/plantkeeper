@@ -1,0 +1,23 @@
+[project]
+name = "plantkeeper-admin"
+version = "0.1.0"
+description = "ASGI Django read models and Django Admin UI."
+requires-python = ">=3.14"
+dependencies = [
+    "plantkeeper-application",
+    "plantkeeper-infrastructure",
+    "django>=6.1",
+    "faststream[kafka]>=0.7.6",
+    "starlette>=0.40",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "plantkeeper.admin"
+
+[tool.uv.sources]
+plantkeeper-application = { workspace = true }
+plantkeeper-infrastructure = { workspace = true }

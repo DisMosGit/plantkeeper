@@ -1,0 +1,14 @@
+[project]
+name = "plantkeeper-iot-simulator"
+version = "0.1.0"
+description = "Virtual IoT sensors publishing telemetry to Kafka."
+requires-python = ">=3.14"
+dependencies = ["aiokafka>=0.14"]
+
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13.0"]
+build-backend = "uv_build"
+
+# The simulator is deliberately independent of the domain/application packages.
+[tool.uv.build-backend]
+module-name = "plantkeeper.iot_simulator"

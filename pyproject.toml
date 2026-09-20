@@ -90,3 +90,50 @@ show_missing = true
 # enabled in Phase 10; a non-zero floor would fail `make test` on the skeleton.
 fail_under = 0
 
+# -----------------------------------------------------------------------------
+# import-linter (run with `uv run lint-imports`)
+# -----------------------------------------------------------------------------
+[tool.importlinter]
+root_packages = ["plantkeeper"]
+# Needed for the `forbidden` contracts that name third-party modules.
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Layered architecture: apps -> infrastructure -> application -> domain"
+type = "layers"
+# A layer is a single string; `|` separates independent modules in that layer.
+layers = [
+    "plantkeeper.api | plantkeeper.admin | plantkeeper.workers",
+    "plantkeeper.infrastructure",
+    "plantkeeper.application",
+    "plantkeeper.domain",
+]
+
+[[tool.importlinter.contracts]]
+name = "Domain layer has no infrastructure dependencies"
+type = "forbidden"
+source_modules = ["plantkeeper.domain"]
+forbidden_modules = [
+    "plantkeeper.application",
+    "plantkeeper.infrastructure",
+    "sqlalchemy",
+    "fastapi",
+    "django",
+    "dishka",
+    "aiokafka",
+    "faststream",
+    "valkey",
+    "httpx",
+    "grpc",
+    "cqrs",
+]
+
+[[tool.importlinter.contracts]]
+name = "IoT simulator stays independent of the application layers"
+type = "forbidden"
+source_modules = ["plantkeeper.iot_simulator"]
+forbidden_modules = [
+    "plantkeeper.domain",
+    "plantkeeper.application",
+    "plantkeeper.infrastructure",
+]

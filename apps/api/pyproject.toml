@@ -1,0 +1,23 @@
+[project]
+name = "plantkeeper-api"
+version = "0.1.0"
+description = "FastAPI REST API and gRPC servicers."
+requires-python = ">=3.14"
+dependencies = [
+    "plantkeeper-application",
+    "plantkeeper-infrastructure",
+    "fastapi>=0.141",
+    "grpcio>=1.84",
+    "uvicorn[standard]>=0.53",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "plantkeeper.api"
+
+[tool.uv.sources]
+plantkeeper-application = { workspace = true }
+plantkeeper-infrastructure = { workspace = true }

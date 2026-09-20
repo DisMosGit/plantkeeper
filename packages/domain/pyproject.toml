@@ -1,0 +1,15 @@
+[project]
+name = "plantkeeper-domain"
+version = "0.1.0"
+description = "Pure DDD layer: aggregates, value objects and domain events."
+requires-python = ">=3.14"
+dependencies = ["pydantic>=2.13"]
+
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13.0"]
+build-backend = "uv_build"
+
+# `plantkeeper.domain` lives in the shared `plantkeeper` namespace: there is no
+# plantkeeper/__init__.py, so every workspace member merges into one package.
+[tool.uv.build-backend]
+module-name = "plantkeeper.domain"
