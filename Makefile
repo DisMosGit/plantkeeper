@@ -1,0 +1,59 @@
+# PlantKeeper — developer entry points.
+#
+# Phase 0 ships infrastructure and tooling only: `dev` starts the compose stack,
+# `migrate` and `iot*` are explicit placeholders that later phases fill in
+# (see ROADMAP.md).
+
+SHELL := /bin/bash
+.DEFAULT_GOAL := help
+
+COMPOSE := docker compose
+
+.PHONY: help dev up down clean lint format test test-unit test-integration test-e2e migrate iot iot-drought
+
+help: ## Show this help
+	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
+		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
+
+dev: ## Start local infra (Kafka, Postgres, Valkey, Console) and wait until healthy
+	$(COMPOSE) up -d --wait --wait-timeout 300
+
+up: ## Start local infra in the background
+	$(COMPOSE) up -d
+
+down: ## Stop local infra, keep volumes
+	$(COMPOSE) down
+
+clean: ## Stop local infra and delete volumes
+	$(COMPOSE) down -v --remove-orphans
+
+lint: ## Ruff + Mypy + import-linter
+	uv run ruff check .
+	uv run ruff format --check .
+	uv run mypy .
+	uv run lint-imports
+
+format: ## Apply Ruff formatting and autofixes
+	uv run ruff format .
+	uv run ruff check --fix .
+
+test: ## Run all tests with coverage
+	uv run pytest --cov=plantkeeper --cov-report=term-missing
+
+test-unit: ## Unit tests only
+	uv run pytest tests/unit
+
+test-integration: ## Integration tests (needs Docker)
+	uv run pytest tests/integration -m integration
+
+test-e2e: ## End-to-end tests (need `make dev`)
+	uv run pytest tests/e2e -m slow
+
+migrate: ## Apply all migrations (added in Phase 2/3)
+	@echo "No migrations yet: Alembic lands in Phase 2, Django migrations in Phase 3."
+
+iot: ## Run the IoT simulator, normal scenario (added in Phase 5)
+	@echo "IoT simulator lands in Phase 5: uv run python -m plantkeeper.iot_simulator --scenario normal"
+
+iot-drought: ## Run the IoT simulator, drought scenario (added in Phase 5)
+	@echo "IoT simulator lands in Phase 5: uv run python -m plantkeeper.iot_simulator --scenario drought"
