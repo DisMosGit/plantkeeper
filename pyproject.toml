@@ -1,0 +1,24 @@
+[project]
+name = "plantkeeper"
+version = "0.1.0"
+description = "Event-driven plant care platform: DDD + CQRS + Event Sourcing."
+readme = "README.md"
+authors = [
+    { name = "DisMosGit", email = "DisSurgu@ya.ru" }
+]
+requires-python = ">=3.14"
+dependencies = []
+
+# The repository root is a workspace root, not an installable package:
+# only the members under packages/, apps/ and tools/ are built and installed.
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.8",
+    "testcontainers>=4.15.0",
+]
