@@ -34,6 +34,7 @@ from plantkeeper.domain.care.events import (
     WateringRescheduled,
 )
 from plantkeeper.domain.catalog.events import (
+    SpeciesAdded,
     SpeciesCacheInvalidated,
     SpeciesSyncRequested,
     SpeciesUpdated,
@@ -132,6 +133,18 @@ def species_updated(*, common_name: str = "Boston fern", version: int = 2) -> Sp
     return SpeciesUpdated(
         species_id=SPECIES,
         scientific_name="Nephrolepis exaltata",
+        common_name=common_name,
+        watering_interval=WateringInterval(value=WEEK),
+        light_requirement=LightRequirement.MEDIUM,
+        version=version,
+    )
+
+
+def species_added(*, common_name: str = "Aloe", version: int = 1) -> SpeciesAdded:
+    """``SpeciesAdded`` for the shared species."""
+    return SpeciesAdded(
+        species_id=SPECIES,
+        scientific_name="Aloe vera",
         common_name=common_name,
         watering_interval=WateringInterval(value=WEEK),
         light_requirement=LightRequirement.MEDIUM,
@@ -333,6 +346,21 @@ def test_an_existing_schedule_is_refreshed_without_losing_its_version(
 
 
 # --- Catalog ------------------------------------------------------------------
+
+
+def test_species_added_creates_the_catalogue_row(read_side_database: str) -> None:
+    """A species that entered the catalogue has no prior row to update."""
+    PROJECTIONS["garden"].apply(plant_added(), consumer_group=group("garden"))
+
+    PROJECTIONS["catalog"].apply(species_added(), consumer_group=group("catalog"))
+
+    species = SpeciesReadModel.objects.get(species_id=SPECIES.value)
+    assert species.scientific_name == "Aloe vera"
+    assert species.common_name == "Aloe"
+    assert species.watering_interval == WEEK
+    assert species.light_requirement == "medium"
+    assert species.version == 1
+    assert PlantReadModel.objects.get(plant_id=PLANT.value).species_name == "Aloe"
 
 
 def test_species_updated_names_the_plants_of_that_species(read_side_database: str) -> None:

@@ -7,13 +7,15 @@ can fail *after* the second committed — which is exactly the failure the
 compensation exists for.
 
 Compensation restores each changed species to the snapshot taken before its
-update. The restore goes through ``Species.update`` like any other change, so it
-records a ``SpeciesUpdated`` of its own: a rollback is a catalogue change that
-consumers (and the read model) must see, not a silent rewrite.
+update and deletes each species the run created. The restore goes through
+``Species.update`` like any other change, so it records a ``SpeciesUpdated`` of
+its own: a rollback is a catalogue change that consumers (and the read model)
+must see, not a silent rewrite.
 
-Upstream creation is deliberately out of scope: the catalogue has no
-``SpeciesCreated`` event, so a species the local table does not know is skipped
-with a warning. Phase 9 decides whether the Trefle adapter should create entries.
+Creation arrived with the Trefle adapter (Phase 9): an upstream species the local
+table does not know is inserted with ``Species.add``, which records
+``SpeciesAdded``. Upstream *removal* stays out of scope — Trefle has no "species
+gone" signal, so local entries are never deleted by a synchronisation.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from cqrs.saga.models import SagaContext
 from cqrs.saga.step import SagaStepHandler, SagaStepResult
 
 from plantkeeper.application.errors import UnhandledSagaTriggerError
-from plantkeeper.application.ports.catalog import SpeciesCache, SpeciesSource
+from plantkeeper.application.ports.catalog import SpeciesCacheInvalidator, SpeciesSource
 from plantkeeper.application.ports.clock import Clock
 from plantkeeper.application.ports.unit_of_work import UnitOfWork
 from plantkeeper.application.sagas.base import Saga
@@ -84,23 +86,28 @@ class FetchSpeciesStep(SagaStepHandler[SpeciesSyncContext, None]):
 
 
 class ApplySpeciesUpdatesStep(SagaStepHandler[SpeciesSyncContext, None]):
-    """Step 2: write the differences, remembering each before-image."""
+    """Step 2: write the differences, remembering each before-image.
+
+    A species the local catalogue does not know is *created* here and its
+    identifier remembered, so the compensation can remove it again: a species that
+    entered the catalogue as part of a run that then failed must not survive the
+    rollback. Trefle cannot delete a species, so a catalogue entry that vanishes
+    upstream is simply left alone.
+    """
 
     def __init__(self, unit_of_work: UnitOfWork, clock: Clock) -> None:
         self._unit_of_work = unit_of_work
         self._clock = clock
 
     async def act(self, context: SpeciesSyncContext) -> SagaStepResult[SpeciesSyncContext, None]:
-        """Update every changed species and commit them together."""
+        """Create unknown species, update changed ones, and commit them together."""
         now = self._clock.now()
         for record in context.fetched:
             species = await self._unit_of_work.species.get_for_update(
                 SpeciesId(UUID(record.species_id))
             )
             if species is None:
-                logger.warning(
-                    "species %s is not in the local catalogue; skipping", record.species_id
-                )
+                context.created.append(str(await self._create(record, now=now)))
                 continue
             before = _snapshot(species)
             changed = species.update(
@@ -118,13 +125,39 @@ class ApplySpeciesUpdatesStep(SagaStepHandler[SpeciesSyncContext, None]):
             await self._unit_of_work.species.save(species)
             context.updated.append(before)
         await self._unit_of_work.commit()
-        logger.info("catalogue synchronisation updated %d species", len(context.updated))
+        logger.info(
+            "catalogue synchronisation created %d and updated %d species",
+            len(context.created),
+            len(context.updated),
+        )
         return self._generate_step_result(None)
 
+    async def _create(self, record: SpeciesSnapshot, *, now: datetime) -> SpeciesId:
+        """Insert one upstream species and return the identifier it was given."""
+        species_id = SpeciesId(UUID(record.species_id))
+        species = Species.add(
+            species_id=species_id,
+            scientific_name=record.scientific_name,
+            common_name=record.common_name,
+            watering_interval=WateringInterval(
+                value=timedelta(seconds=record.watering_interval_seconds)
+            ),
+            light_requirement=LightRequirement(record.light_requirement),
+            now=now,
+        )
+        await self._unit_of_work.species.add(species)
+        return species_id
+
     async def compensate(self, context: SpeciesSyncContext) -> None:
-        """Restore every species this step changed to its before-image."""
+        """Delete what this step created and restore every species it changed."""
         now = self._clock.now()
-        logger.warning("rolling back %d catalogue updates", len(context.updated))
+        logger.warning(
+            "rolling back %d catalogue creations and %d updates",
+            len(context.created),
+            len(context.updated),
+        )
+        for species_id in context.created:
+            await self._unit_of_work.species.delete(SpeciesId(UUID(species_id)))
         for before in context.updated:
             species = await self._unit_of_work.species.get_for_update(
                 SpeciesId(UUID(before.species_id))
@@ -144,12 +177,13 @@ class ApplySpeciesUpdatesStep(SagaStepHandler[SpeciesSyncContext, None]):
             await self._unit_of_work.species.save(species)
         await self._unit_of_work.commit()
         context.updated = []
+        context.created = []
 
 
 class InvalidateSpeciesCacheStep(SagaStepHandler[SpeciesSyncContext, None]):
     """Step 3: declare the changed catalogue entries stale."""
 
-    def __init__(self, unit_of_work: UnitOfWork, species_cache: SpeciesCache) -> None:
+    def __init__(self, unit_of_work: UnitOfWork, species_cache: SpeciesCacheInvalidator) -> None:
         self._unit_of_work = unit_of_work
         self._species_cache = species_cache
 

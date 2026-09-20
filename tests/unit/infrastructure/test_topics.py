@@ -2,7 +2,7 @@
 
 ``docs/events.md`` fixes the event catalogue, ``tests/unit/domain/test_events_catalogue.py``
 guards it, and this module guards the other half of the contract: every one of
-those 25 events must have a topic, and no topic may be invented for an event that
+those 26 events must have a topic, and no topic may be invented for an event that
 does not exist.
 """
 
@@ -23,6 +23,7 @@ from plantkeeper.domain.care.events import (
     WateringRescheduled,
 )
 from plantkeeper.domain.catalog.events import (
+    SpeciesAdded,
     SpeciesCacheInvalidated,
     SpeciesSyncRequested,
     SpeciesUpdated,
@@ -108,6 +109,14 @@ EVENT_SAMPLES: list[DomainEvent] = [
     CareMissed(plant_id=PLANT, next_watering_at=NOW),
     CareSkipped(plant_id=PLANT, skipped_at=NOW, next_watering_at=NOW),
     SpeciesSyncRequested(),
+    SpeciesAdded(
+        species_id=SPECIES,
+        scientific_name="Nephrolepis exaltata",
+        common_name="Boston fern",
+        watering_interval=WEEK,
+        light_requirement=LightRequirement.MEDIUM,
+        version=1,
+    ),
     SpeciesUpdated(
         species_id=SPECIES,
         scientific_name="Nephrolepis exaltata",
@@ -164,7 +173,7 @@ EVENT_SAMPLES: list[DomainEvent] = [
 
 
 def test_every_catalogued_event_has_a_topic() -> None:
-    assert len(EVENT_SAMPLES) == 25
+    assert len(EVENT_SAMPLES) == 26
     assert {type(event) for event in EVENT_SAMPLES} == set(EVENT_TOPICS)
 
 

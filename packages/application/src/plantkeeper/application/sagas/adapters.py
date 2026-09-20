@@ -1,10 +1,11 @@
 """Small adapters that connect the saga ports to the write side's own ports.
 
 They live in the application layer because they depend only on other ports — a
-repository protocol and a unit of work — never on SQLAlchemy or Kafka. Two of
-them exist purely as seams for later phases: ``SpeciesCatalog`` grows a Trefle
-fallback in Phase 9, and ``OutboxSpeciesCache`` is replaced by a Valkey adapter
-that drops the cached entry as well as announcing it.
+repository protocol and a unit of work — never on SQLAlchemy or Kafka.
+``OutboxSpeciesCache`` implements the narrow ``SpeciesCacheInvalidator`` protocol:
+the synchronisation saga announces staleness through the outbox, and the Valkey
+adapter in the worker drops the keys when ``SpeciesCacheConsumer`` receives the
+event. The saga therefore never opens a Valkey connection inside its transaction.
 """
 
 from __future__ import annotations
@@ -20,7 +21,12 @@ from plantkeeper.domain.identifiers import SpeciesId
 
 
 class RepositorySpeciesCatalog:
-    """The ``SpeciesCatalog`` port over the local catalogue repository."""
+    """The ``SpeciesCatalog`` port over the local catalogue repository.
+
+    Deliberately local-only: the synchronisation fills the catalogue on a
+    schedule, so onboarding never waits on an external HTTP call for a species it
+    has not seen.
+    """
 
     def __init__(self, species: SpeciesRepository) -> None:
         self._species = species
@@ -31,12 +37,13 @@ class RepositorySpeciesCatalog:
 
 
 class OutboxSpeciesCache:
-    """The ``SpeciesCache`` port as Phase 4 can honour it: announce the staleness.
+    """The ``SpeciesCacheInvalidator`` port over the request's outbox.
 
     The event is the contract — ``SpeciesCacheInvalidated`` travels through the
-    same outbox as every other event, and the Valkey consumer that acts on it
-    arrives with the cache in Phase 9. Publishing here keeps the saga's step
-    sequence complete and gives its compensation something concrete to fail on.
+    same outbox as every other event, and ``SpeciesCacheConsumer`` in the worker
+    turns it into a Valkey ``DEL``. Publishing here keeps the saga's step
+    sequence complete, gives its compensation something concrete to fail on, and
+    keeps every external call out of the saga's database transaction.
     """
 
     def __init__(self, unit_of_work: UnitOfWork) -> None:
@@ -49,12 +56,11 @@ class OutboxSpeciesCache:
 
 
 class UnconfiguredSpeciesSource:
-    """The ``SpeciesSource`` port before the Trefle client exists.
+    """The ``SpeciesSource`` binding when no Trefle token is configured.
 
     Returning nothing rather than raising keeps a manual ``POST /catalog/sync``
-    from failing in Phase 4: the saga completes with zero updates, which is
-    exactly what a catalogue with no configured upstream knows. Phase 9 replaces
-    this binding with the Trefle anti-corruption layer.
+    from failing on a local checkout: the saga completes with zero changes, which
+    is exactly what a catalogue with no configured upstream knows.
     """
 
     async def fetch_all(self) -> list[SpeciesRecord]:

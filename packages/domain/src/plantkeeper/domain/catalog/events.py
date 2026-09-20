@@ -16,6 +16,22 @@ class SpeciesSyncRequested(DomainEvent):
     """
 
 
+class SpeciesAdded(DomainEvent):
+    """A species entered the local catalogue from the upstream one.
+
+    Creation is a state change consumers must see: the read side's ``species``
+    projection is built from these events, and before Phase 9 the catalogue had no
+    way to announce a new entry at all.
+    """
+
+    species_id: SpeciesId
+    scientific_name: str
+    common_name: str
+    watering_interval: WateringInterval
+    light_requirement: LightRequirement
+    version: int
+
+
 class SpeciesUpdated(DomainEvent):
     """A species changed as a result of a Trefle synchronisation."""
 

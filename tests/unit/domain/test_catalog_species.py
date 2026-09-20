@@ -9,6 +9,7 @@ import pytest
 
 from plantkeeper.domain.catalog.errors import SpeciesNameEmptyError, SpeciesVersionConflictError
 from plantkeeper.domain.catalog.events import (
+    SpeciesAdded,
     SpeciesCacheInvalidated,
     SpeciesSyncRequested,
     SpeciesUpdated,
@@ -84,6 +85,44 @@ def test_create_rejects_a_blank_common_name(name: str) -> None:
 
 def test_create_records_no_events() -> None:
     assert _create().collect_events() == []
+
+
+def test_add_records_a_species_added_event(now: datetime) -> None:
+    species_id = SpeciesId(uuid4())
+
+    species = Species.add(
+        species_id=species_id,
+        scientific_name="Monstera deliciosa",
+        common_name="Swiss cheese plant",
+        watering_interval=INTERVAL,
+        light_requirement=LightRequirement.MEDIUM,
+        now=now,
+    )
+
+    events = species.collect_events()
+    assert len(events) == 1
+    event = events[0]
+    assert isinstance(event, SpeciesAdded)
+    assert event.species_id == species_id
+    assert event.scientific_name == "Monstera deliciosa"
+    assert event.common_name == "Swiss cheese plant"
+    assert event.watering_interval == INTERVAL
+    assert event.light_requirement is LightRequirement.MEDIUM
+    assert event.version == 1
+    assert event.occurred_at == now
+    # The event is collected once, like every other aggregate's.
+    assert species.collect_events() == []
+
+
+def test_add_still_enforces_the_invariants(now: datetime) -> None:
+    with pytest.raises(SpeciesNameEmptyError):
+        Species.add(
+            scientific_name="",
+            common_name="Swiss cheese plant",
+            watering_interval=INTERVAL,
+            light_requirement=LightRequirement.MEDIUM,
+            now=now,
+        )
 
 
 def test_rebuilding_a_species_records_no_events() -> None:

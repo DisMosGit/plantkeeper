@@ -15,11 +15,14 @@ than the one its repositories wrote to.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import timedelta
 
+from aiolimiter import AsyncLimiter
 from cqrs.requests.map import RequestMap, SagaMap
 from cqrs.saga.storage.protocol import ISagaStorage
 from dishka import Provider, Scope, provide
 from faststream.kafka import KafkaBroker
+from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -28,6 +31,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from valkey.asyncio import Valkey
 
+from plantkeeper.application.catalog.consumer import SpeciesCacheConsumer
 from plantkeeper.application.commands.care import SkipWateringHandler, WaterPlantHandler
 from plantkeeper.application.commands.catalog import RequestSpeciesSyncHandler
 from plantkeeper.application.commands.garden import (
@@ -42,7 +46,12 @@ from plantkeeper.application.commands.telemetry import AddSensorHandler, RemoveS
 from plantkeeper.application.journal.consumer import JournalEntryConsumer
 from plantkeeper.application.notifications.consumer import NotificationConsumer
 from plantkeeper.application.notifications.pusher import NotificationPusher
-from plantkeeper.application.ports.catalog import SpeciesCache, SpeciesCatalog, SpeciesSource
+from plantkeeper.application.ports.catalog import (
+    SpeciesCache,
+    SpeciesCacheInvalidator,
+    SpeciesCatalog,
+    SpeciesSource,
+)
 from plantkeeper.application.ports.clock import Clock
 from plantkeeper.application.ports.event_publisher import EventPublisher
 from plantkeeper.application.ports.event_store import (
@@ -99,8 +108,15 @@ from plantkeeper.application.sagas.species_sync import (
     SpeciesSyncTrigger,
 )
 from plantkeeper.application.telemetry.ingest import TelemetryIngestConsumer
+from plantkeeper.infrastructure.cache.species import ValkeySpeciesCache
 from plantkeeper.infrastructure.clock import SystemClock
 from plantkeeper.infrastructure.config import Settings
+from plantkeeper.infrastructure.external.circuit_breaker import AsyncCircuitBreaker
+from plantkeeper.infrastructure.external.trefle.client import TrefleClient
+from plantkeeper.infrastructure.external.trefle.source import (
+    TrefleSpeciesSource,
+    ValkeySpeciesSnapshotStore,
+)
 from plantkeeper.infrastructure.messaging.broker import build_broker
 from plantkeeper.infrastructure.messaging.publisher import KafkaEventPublisher
 from plantkeeper.infrastructure.messaging.relay import OutboxRelay
@@ -319,13 +335,14 @@ class MessagingProvider(Provider):
         return OutboxRelay(session_factory=session_factory, publisher=publisher, settings=settings)
 
 
-class NotificationProvider(Provider):
-    """Valkey, and the presence channel a long poll waits on.
+class ValkeyProvider(Provider):
+    """The one Valkey client of the process, and what is built on top of it.
 
-    The client lives for the process; it is created lazily, so a container that
-    never resolves the channel — the gRPC process, a test that only builds
-    handlers — never opens a connection to Valkey. Subscriptions do not use this
-    client's connection: the adapter opens one per subscription.
+    Short-lived data lives here: the presence channel a long poll waits on, and
+    the catalogue cache. The client lives for the process and is created lazily,
+    so a container that never resolves either — the gRPC process, a test that only
+    builds handlers — never opens a connection to Valkey. Subscriptions do not use
+    this client's connection: the channel adapter opens one per subscription.
     """
 
     @provide(scope=Scope.APP)
@@ -341,6 +358,71 @@ class NotificationProvider(Provider):
     def notification_channel(self, valkey: Valkey) -> NotificationChannel:
         """Expose the channel through its application-layer port."""
         return ValkeyNotificationChannel(valkey)
+
+    @provide(scope=Scope.APP)
+    def species_cache(self, valkey: Valkey, settings: Settings) -> SpeciesCache:
+        """Cache catalogue reads in Valkey, with the configured TTL."""
+        return ValkeySpeciesCache(valkey, ttl_seconds=settings.species_cache_ttl_seconds)
+
+
+class ExternalProvider(Provider):
+    """The Trefle anti-corruption layer.
+
+    Worker-only: the API never publishes, and the synchronisation runs in the
+    worker, so a process that only serves HTTP has no reason to hold an outbound
+    HTTP client. With no token configured the ``SpeciesSource`` binding is the
+    no-op source, which keeps a local checkout working.
+    """
+
+    @provide(scope=Scope.APP)
+    async def trefle_http_client(self, settings: Settings) -> AsyncIterator[AsyncClient]:
+        """Open the Trefle client and close its connection pool on shutdown."""
+        async with AsyncClient(
+            base_url=settings.trefle_base_url,
+            timeout=settings.trefle_request_timeout_seconds,
+        ) as client:
+            yield client
+
+    @provide(scope=Scope.APP)
+    def trefle_limiter(self, settings: Settings) -> AsyncLimiter:
+        """Hold every Trefle request under the configured per-minute ceiling."""
+        return AsyncLimiter(settings.trefle_requests_per_minute, 60)
+
+    @provide(scope=Scope.APP)
+    def trefle_breaker(self, settings: Settings, clock: Clock) -> AsyncCircuitBreaker:
+        """One breaker for the whole process, so the failure count means something."""
+        return AsyncCircuitBreaker(
+            name="trefle",
+            failure_threshold=settings.trefle_breaker_failure_threshold,
+            reset_timeout=timedelta(seconds=settings.trefle_breaker_reset_seconds),
+            clock=clock,
+        )
+
+    @provide(scope=Scope.APP)
+    def species_source(
+        self,
+        settings: Settings,
+        client: AsyncClient,
+        limiter: AsyncLimiter,
+        breaker: AsyncCircuitBreaker,
+        valkey: Valkey,
+    ) -> SpeciesSource:
+        """Bind the Trefle source, or the no-op one when no token is configured."""
+        if not settings.trefle_token:
+            return UnconfiguredSpeciesSource()
+        return TrefleSpeciesSource(
+            client=TrefleClient(
+                client=client,
+                limiter=limiter,
+                breaker=breaker,
+                token=settings.trefle_token,
+                species_limit=settings.trefle_species_limit,
+                max_attempts=settings.trefle_max_attempts,
+            ),
+            snapshots=ValkeySpeciesSnapshotStore(
+                valkey, ttl_seconds=settings.species_snapshot_ttl_seconds
+            ),
+        )
 
 
 def build_handler_provider() -> Provider:
@@ -373,6 +455,7 @@ SAGA_COMPONENT_TYPES = (
     JournalEntryConsumer,
     NotificationConsumer,
     NotificationPusher,
+    SpeciesCacheConsumer,
     # Ingress
     TelemetryIngestConsumer,
     # Triggers
@@ -391,10 +474,10 @@ repositories to do its work.
 class SagaProvider(Provider):
     """The write-side consumers' dependencies.
 
-    The division follows the lifetimes: the saga storage, the saga map and the
-    upstream catalogue source live for the process; the sagas, their steps and the
-    consumers (and the adapters that read through the request's session) live for
-    one delivery.
+    The division follows the lifetimes: the saga storage and the saga map live for
+    the process; the sagas, their steps and the consumers (and the adapters that
+    read through the request's session) live for one delivery. The upstream
+    catalogue source is not here — it belongs to :class:`ExternalProvider`.
     """
 
     @provide(scope=Scope.APP)
@@ -407,19 +490,18 @@ class SagaProvider(Provider):
         """Bind each saga context type to its saga, once per process."""
         return build_saga_map()
 
-    @provide(scope=Scope.APP)
-    def species_source(self) -> SpeciesSource:
-        """Answer the synchronisation saga; the Trefle adapter arrives in Phase 9."""
-        return UnconfiguredSpeciesSource()
-
     @provide(scope=Scope.REQUEST)
     def species_catalog(self, species: SpeciesRepository) -> SpeciesCatalog:
         """Read the local catalogue through the onboarding saga's ACL."""
         return RepositorySpeciesCatalog(species)
 
     @provide(scope=Scope.REQUEST)
-    def species_cache(self, unit_of_work: UnitOfWork) -> SpeciesCache:
-        """Announce cache staleness through the request's outbox."""
+    def species_cache_invalidator(self, unit_of_work: UnitOfWork) -> SpeciesCacheInvalidator:
+        """Let the synchronisation saga declare staleness through its outbox.
+
+        The actual ``DEL`` is ``SpeciesCacheConsumer``'s, once the event has
+        travelled; the saga never opens a Valkey connection.
+        """
         return OutboxSpeciesCache(unit_of_work)
 
 
@@ -439,19 +521,21 @@ def build_saga_component_provider() -> Provider:
 def worker_providers() -> list[Provider]:
     """Return the providers the outbox relay worker needs.
 
-    The saga providers and the notification channel are here and not in
-    ``api_providers``: the API writes to the outbox and never consumes, so
+    The saga providers, the notification channel and the Trefle ACL are here and
+    not in ``api_providers``: the API writes to the outbox and never consumes, so
     building a saga storage in it would only add a second writer to the process
     that must not have one. The worker holds the channel because it is what wakes
-    a household whose long poll is waiting.
+    a household whose long poll is waiting, and the Trefle client because the
+    catalogue synchronisation runs here.
     """
     return [
         AppProvider(),
         DatabaseProvider(),
         RepositoryProvider(),
         MessagingProvider(),
-        NotificationProvider(),
+        ValkeyProvider(),
         SagaProvider(),
+        ExternalProvider(),
         build_handler_provider(),
         build_saga_component_provider(),
     ]
@@ -462,13 +546,14 @@ def api_providers() -> list[Provider]:
 
     The API never publishes: it writes to the outbox and the relay does the rest,
     so the Kafka broker is not part of its container. It does hold the
-    notification channel, because the long-poll endpoint subscribes to it, and
-    that client is only opened if such a request arrives.
+    notification channel, because the long-poll endpoint subscribes to it, and the
+    species cache, because ``GetSpeciesQuery`` reads through it; both clients are
+    only opened if such a request arrives.
     """
     return [
         AppProvider(),
         DatabaseProvider(),
         RepositoryProvider(),
-        NotificationProvider(),
+        ValkeyProvider(),
         build_handler_provider(),
     ]

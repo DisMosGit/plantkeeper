@@ -20,6 +20,7 @@ from plantkeeper.domain.care.events import (
     WateringRescheduled,
 )
 from plantkeeper.domain.catalog.events import (
+    SpeciesAdded,
     SpeciesCacheInvalidated,
     SpeciesSyncRequested,
     SpeciesUpdated,
@@ -60,6 +61,7 @@ EVENT_TYPES: list[type[DomainEvent]] = [
     CareMissed,
     CareSkipped,
     SpeciesSyncRequested,
+    SpeciesAdded,
     SpeciesUpdated,
     SpeciesCacheInvalidated,
     JournalEntryAdded,
@@ -80,8 +82,8 @@ EXPECTED_EVENT_NAMES = {event_type.__name__ for event_type in EVENT_TYPES}
 
 
 def test_the_catalogue_has_the_documented_size() -> None:
-    assert len(EVENT_TYPES) == 25
-    assert len(EXPECTED_EVENT_NAMES) == 25
+    assert len(EVENT_TYPES) == 26
+    assert len(EXPECTED_EVENT_NAMES) == 26
 
 
 @pytest.mark.parametrize("event_type", EVENT_TYPES, ids=lambda event_type: event_type.__name__)

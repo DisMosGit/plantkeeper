@@ -8,6 +8,7 @@ from plantkeeper.domain.catalog.errors import (
     SpeciesVersionConflictError,
 )
 from plantkeeper.domain.catalog.events import (
+    SpeciesAdded,
     SpeciesCacheInvalidated,
     SpeciesSyncRequested,
     SpeciesUpdated,
@@ -19,6 +20,7 @@ __all__ = [
     "CatalogError",
     "LightRequirement",
     "Species",
+    "SpeciesAdded",
     "SpeciesCacheInvalidated",
     "SpeciesNameEmptyError",
     "SpeciesSyncRequested",

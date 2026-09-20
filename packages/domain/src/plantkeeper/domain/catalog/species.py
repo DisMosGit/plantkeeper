@@ -6,7 +6,7 @@ from datetime import datetime
 
 from plantkeeper.domain.base import AggregateRoot
 from plantkeeper.domain.catalog.errors import SpeciesNameEmptyError, SpeciesVersionConflictError
-from plantkeeper.domain.catalog.events import SpeciesUpdated
+from plantkeeper.domain.catalog.events import SpeciesAdded, SpeciesUpdated
 from plantkeeper.domain.catalog.values import LightRequirement
 from plantkeeper.domain.identifiers import SpeciesId
 from plantkeeper.domain.values import WateringInterval
@@ -18,7 +18,8 @@ class Species(AggregateRoot[SpeciesId]):
     The aggregate is versioned: Trefle synchronisation reads version N, compares
     it with the local entry, and writes with ``expected_version`` so a concurrent
     update becomes a :class:`SpeciesVersionConflictError` instead of a silent
-    overwrite. Creating a species records no event; changing one records
+    overwrite. :meth:`add` records :class:`~plantkeeper.domain.catalog.events.SpeciesAdded`
+    for an entry that just entered the catalogue; changing one records
     :class:`~plantkeeper.domain.catalog.events.SpeciesUpdated`.
     """
 
@@ -58,6 +59,45 @@ class Species(AggregateRoot[SpeciesId]):
             watering_interval=watering_interval,
             light_requirement=light_requirement,
         )
+
+    @classmethod
+    def add(
+        cls,
+        *,
+        scientific_name: str,
+        common_name: str,
+        watering_interval: WateringInterval,
+        light_requirement: LightRequirement,
+        now: datetime,
+        species_id: SpeciesId | None = None,
+    ) -> Species:
+        """Register a newly synchronised species and record ``SpeciesAdded``.
+
+        Like :meth:`~plantkeeper.domain.garden.plant.Plant.add`, this is the
+        factory the write path uses: it records the fact so the read side hears
+        about the new catalogue entry. Reconstruction — a row read back, or a test
+        that only needs an aggregate — uses :meth:`create` or the constructor,
+        neither of which records anything.
+        """
+        species = cls.create(
+            scientific_name=scientific_name,
+            common_name=common_name,
+            watering_interval=watering_interval,
+            light_requirement=light_requirement,
+            species_id=species_id,
+        )
+        species._record(
+            SpeciesAdded(
+                species_id=species.id,
+                scientific_name=species.scientific_name,
+                common_name=species.common_name,
+                watering_interval=species.watering_interval,
+                light_requirement=species.light_requirement,
+                version=species.version,
+                occurred_at=now,
+            )
+        )
+        return species
 
     @property
     def scientific_name(self) -> str:

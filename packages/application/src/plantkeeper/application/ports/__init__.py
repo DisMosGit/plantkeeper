@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from plantkeeper.application.ports.catalog import (
     SpeciesCache,
+    SpeciesCacheInvalidator,
     SpeciesCatalog,
     SpeciesRecord,
     SpeciesSource,
@@ -74,6 +75,7 @@ __all__ = (
     "SagaStateRepository",
     "SensorRepository",
     "SpeciesCache",
+    "SpeciesCacheInvalidator",
     "SpeciesCatalog",
     "SpeciesRecord",
     "SpeciesRepository",

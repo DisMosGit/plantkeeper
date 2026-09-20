@@ -61,3 +61,4 @@ class SpeciesSyncContext(SagaContext):
     requested_by: str
     fetched: list[SpeciesSnapshot] = field(default_factory=list)
     updated: list[SpeciesSnapshot] = field(default_factory=list)
+    created: list[str] = field(default_factory=list)

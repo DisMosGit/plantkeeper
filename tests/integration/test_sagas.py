@@ -633,3 +633,87 @@ async def test_the_sync_trigger_consumer_runs_the_saga_once(
     names = await outbox_event_names(session_factory)
     assert names.count("SpeciesCacheInvalidated") == 1
     assert names.count("SagaStarted") == 1
+
+
+async def test_the_sync_creates_a_species_the_local_catalogue_does_not_know(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Phase 9's creation path: an upstream entry becomes a local one."""
+    species_id = SpeciesId.new()
+    storage = SqlAlchemySagaStorage(session_factory)
+    saga = SpeciesSyncSaga(storage)
+    clock = FakeClock(NOW)
+    source = StubSource([a_record(species_id, common_name="Aloe", interval=timedelta(days=14))])
+
+    async with session_factory() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        steps: dict[type, object] = {
+            FetchSpeciesStep: FetchSpeciesStep(source),
+            ApplySpeciesUpdatesStep: ApplySpeciesUpdatesStep(uow, clock),
+            InvalidateSpeciesCacheStep: InvalidateSpeciesCacheStep(uow, OutboxSpeciesCache(uow)),
+        }
+        event = species_sync_requested()
+        saga_id = saga.saga_id_for(saga.context_from_event(event))
+        assert await saga.handle_event(
+            event, dispatcher=a_dispatcher(saga, steps, storage), unit_of_work=uow
+        )
+
+    assert await saga_status(session_factory, saga_id) is SagaStatus.COMPLETED
+    created = await read_species(session_factory, species_id)
+    assert created is not None
+    assert created.common_name == "Aloe"
+    assert created.version == 1
+    names = await outbox_event_names(session_factory)
+    assert names.count("SpeciesAdded") == 1
+    assert names.count("SpeciesUpdated") == 0
+    # Nothing was cached yet, so a creation declares no staleness.
+    assert names.count("SpeciesCacheInvalidated") == 0
+
+
+async def test_a_failing_cache_step_removes_what_the_sync_created(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Compensation of a step-2 creation deletes the row it inserted.
+
+    The already-staged ``SpeciesAdded`` cannot be unpublished (the same caveat
+    ADR 0005 records for ``PlantOnboarded``): the read side may therefore keep a
+    row for a species whose write-side row the rollback removed, until the read
+    model is rebuilt. What compensation can and does guarantee is that the local
+    catalogue is back to its before-image.
+    """
+    known = SpeciesId.new()
+    await seed_species(session_factory, known)
+    unknown = SpeciesId.new()
+    storage = SqlAlchemySagaStorage(session_factory)
+    saga = SpeciesSyncSaga(storage)
+    clock = FakeClock(NOW)
+    source = StubSource(
+        [
+            a_record(known, common_name="Sword fern", interval=timedelta(days=3)),
+            a_record(unknown, common_name="Aloe", interval=timedelta(days=14)),
+        ]
+    )
+
+    async with session_factory() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        steps: dict[type, object] = {
+            FetchSpeciesStep: FetchSpeciesStep(source),
+            ApplySpeciesUpdatesStep: ApplySpeciesUpdatesStep(uow, clock),
+            InvalidateSpeciesCacheStep: InvalidateSpeciesCacheStep(uow, FailingCache()),
+        }
+        event = species_sync_requested()
+        saga_id = saga.saga_id_for(saga.context_from_event(event))
+        with pytest.raises(RuntimeError, match="cache is down"):
+            await saga.handle_event(
+                event, dispatcher=a_dispatcher(saga, steps, storage), unit_of_work=uow
+            )
+
+    assert await saga_status(session_factory, saga_id) is SagaStatus.FAILED
+    assert await read_species(session_factory, unknown) is None
+    restored = await read_species(session_factory, known)
+    assert restored is not None
+    assert restored.common_name == "Boston fern"
+    names = await outbox_event_names(session_factory)
+    assert names.count("SpeciesAdded") == 1
+    assert names.count("SpeciesUpdated") == 2
+    assert "SagaCompensated" in names

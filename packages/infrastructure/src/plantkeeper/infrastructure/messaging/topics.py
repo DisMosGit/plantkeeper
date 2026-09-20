@@ -30,6 +30,7 @@ from plantkeeper.domain.care.events import (
     WateringRescheduled,
 )
 from plantkeeper.domain.catalog.events import (
+    SpeciesAdded,
     SpeciesCacheInvalidated,
     SpeciesSyncRequested,
     SpeciesUpdated,
@@ -85,6 +86,7 @@ EVENT_TOPICS: Final[dict[type[DomainEvent], str]] = {
     CareSkipped: CARE_EVENTS,
     # Catalog
     SpeciesSyncRequested: CATALOG_EVENTS,
+    SpeciesAdded: CATALOG_EVENTS,
     SpeciesUpdated: CATALOG_EVENTS,
     SpeciesCacheInvalidated: CATALOG_EVENTS,
     # Journal
