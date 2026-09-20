@@ -36,14 +36,14 @@ and everything a consumer needs beyond it travels in the headers.
 
 **Topics — one per bounded context, not one per event type.** A consumer that
 cares about three Garden events subscribes once and dispatches on the
-`event_name` header. Twenty-five topics would push the broker's metadata cost onto
+`event_name` header. Twenty-six topics would push the broker's metadata cost onto
 every consumer for no benefit at this scale.
 
 | Topic | Events |
 |-------|--------|
 | `garden.events` | `PlantAdded`, `PlantRemoved`, `PlantMoved`, `PlantOnboarded` |
 | `care.events` | `CareScheduleCreated`, `WateringDue`, `WateringCompleted`, `WateringRescheduled`, `CareMissed`, `CareSkipped` |
-| `catalog.events` | `SpeciesSyncRequested`, `SpeciesUpdated`, `SpeciesCacheInvalidated` |
+| `catalog.events` | `SpeciesSyncRequested`, `SpeciesAdded`, `SpeciesUpdated`, `SpeciesCacheInvalidated` |
 | `journal.events` | `JournalEntryAdded` |
 | `telemetry.events` | `TelemetryReceived`, `SoilMoistureLow`, `SoilMoistureHigh`, `TemperatureAnomaly`, `SensorOffline` |
 | `notifications.events` | `NotificationCreated`, `NotificationRead` |
@@ -88,7 +88,8 @@ projection (`<READ_SIDE_CONSUMER_GROUP_PREFIX>-garden`, `…-care`, `…-catalog
 `…-notifications`, `…-journal`) with `auto_offset_reset="earliest"`, which is what
 makes a rebuilt read table possible. The write side runs one group per consumer
 (`<WORKER_CONSUMER_GROUP_PREFIX>-onboard-plant`, `…-adaptive-watering`,
-`…-missed-care`, `…-species-sync`, `…-journal-entries`). A consumer that meets an unknown
+`…-missed-care`, `…-species-sync`, `…-species-cache`, `…-notifications`,
+`…-journal-entries`). A consumer that meets an unknown
 `event_name`, or a body that does not validate, logs it with the `event_id` and
 acknowledges it rather than blocking the partition behind a contract violation.
 
@@ -130,8 +131,9 @@ write side's ([`docs/sagas.md`](sagas.md)).
 | Event | Payload | Emitted by | Consumed by |
 |-------|---------|-----------|-------------|
 | `SpeciesSyncRequested` | *(no payload)* | `SpeciesSyncScheduler`, `POST /api/v1/catalog/sync` | `SpeciesSyncSaga` |
-| `SpeciesUpdated` | `species_id`, `scientific_name`, `common_name`, `watering_interval`, `light_requirement`, `version` | `Species` (`update`), `SpeciesSyncSaga`'s compensation | `SpeciesProjection`; Valkey cache (Phase 9) |
-| `SpeciesCacheInvalidated` | `species_id` | `SpeciesSyncSaga` | Valkey species cache (Phase 9) |
+| `SpeciesAdded` | `species_id`, `scientific_name`, `common_name`, `watering_interval`, `light_requirement`, `version` | `Species` (`add`), called by `SpeciesSyncSaga` | `SpeciesProjection` |
+| `SpeciesUpdated` | `species_id`, `scientific_name`, `common_name`, `watering_interval`, `light_requirement`, `version` | `Species` (`update`), `SpeciesSyncSaga`'s compensation | `SpeciesProjection`; `SpeciesCacheConsumer` |
+| `SpeciesCacheInvalidated` | `species_id` | `SpeciesSyncSaga` | `SpeciesCacheConsumer` |
 
 ### Journal
 

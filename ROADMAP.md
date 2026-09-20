@@ -946,31 +946,94 @@
 > **Цель:** реальная синхронизация каталога с внешним API.
 > **Результат фазы:** SpeciesSyncSaga тянет данные из Trefle, Circuit Breaker защищает от падений.
 
+> **Статус:** ✅ выполнено — `TrefleClient` пагинирует `/species`, тянет detail по каждому
+> виду, держит лимит 55 req/min (`aiolimiter`), ретраит transient-ошибки (`tenacity`) и
+> защищён проектным `AsyncCircuitBreaker` поверх порта `Clock`; `TrefleSpeciesSource`
+> откатывается на последний снапшот в Valkey. `SpeciesSyncSaga` теперь создаёт незнакомые
+> виды (`SpeciesAdded`, каталог 25 → 26) и обновляет изменившиеся, а её компенсация
+> удаляет созданное. `ValkeySpeciesCache` (TTL 24ч) обслуживает `GetSpeciesQuery`, а
+> `SpeciesCacheConsumer` роняет ключи на `SpeciesUpdated`/`SpeciesCacheInvalidated`.
+> `make lint` и `make test` зелёные (unit 621, integration и e2e — см. блок ниже).
+> Коммиты созданы локально, push в `origin` не выполнялся.
+
 ### 9.1. Trefle client (Anti-Corruption Layer)
-- [ ] `TrefleClient` (httpx.AsyncClient) · `M` 🧪
-- [ ] Модели ответов Trefle (Pydantic) · `M`
-- [ ] Маппинг Trefle → домен `Species` · `M` 🧪
-- [ ] Rate limiting (120 req/min) через `aiolimiter` · `M` 🧪
-- [ ] Коммит: `feat(infra): trefle acl` · `L` 🧪
+- [x] `TrefleClient` (httpx.AsyncClient) · `M` 🧪
+- [x] Модели ответов Trefle (Pydantic) · `M`
+- [x] Маппинг Trefle → домен `Species` · `M` 🧪
+- [x] Rate limiting (55 req/min) через `aiolimiter` · `M` 🧪
+- [x] Коммит: `feat(infra): trefle acl` · `L` 🧪
 
 ### 9.2. Circuit Breaker + Retry
-- [ ] Circuit Breaker (tenacity / pybreaker) на TrefleClient · `M` 🧪
-- [ ] Retry с exponential backoff · `S` 🧪
-- [ ] Fallback: вернуть кэш из Valkey · `M` 🧪
-- [ ] Коммит: `feat(infra): circuit breaker for trefle` · `M` 🧪
+- [x] Circuit Breaker (tenacity / pybreaker) на TrefleClient · `M` 🧪
+- [x] Retry с exponential backoff · `S` 🧪
+- [x] Fallback: вернуть кэш из Valkey · `M` 🧪
+- [x] Коммит: `feat(infra): circuit breaker for trefle` · `M` 🧪
 
 ### 9.3. Valkey cache
-- [ ] `SpeciesCache` (get/set/invalidate) с TTL 24ч · `M` 🧪
-- [ ] Кэш-хит в GetSpeciesQuery · `S` 🧪
-- [ ] Инвалидация при `SpeciesUpdated` · `S` 🧪
-- [ ] Коммит: `feat(infra): species cache` · `M` 🧪
+- [x] `SpeciesCache` (get/set/invalidate) с TTL 24ч · `M` 🧪
+- [x] Кэш-хит в GetSpeciesQuery · `S` 🧪
+- [x] Инвалидация при `SpeciesUpdated` · `S` 🧪
+- [x] Коммит: `feat(infra): species cache` · `M` 🧪
 
 ### 9.4. Финальная интеграция SpeciesSyncSaga
-- [ ] Связать SpeciesSyncSaga с TrefleClient · `M` 🧪
-- [ ] Синхронизация 30 видов end-to-end · `M` 🧪
-- [ ] Коммит: `feat(application): species sync with trefle` · `M` 🧪
+- [x] Связать SpeciesSyncSaga с TrefleClient · `M` 🧪
+- [x] Синхронизация 30 видов end-to-end · `M` 🧪
+- [x] Коммит: `feat(application): species sync with trefle` · `M` 🧪
 
 **✅ Phase 9 завершена, когда:** `POST /catalog/sync` подтягивает виды из Trefle, кэш работает.
+
+**Отклонения и уточнения:**
+- **Контракт Trefle сверен с живой документацией.** Списочные эндпоинты отдают только
+  таксономию, без `growth`: вода и свет есть лишь в detail-запросе, по одному на вид.
+  30 видов = 2 страницы списка + 30 detail = ~32 запроса при лимите 55/мин.
+  Это зафиксировано в `docs/catalog.md`; тесты ходят через `httpx.MockTransport`, без сети.
+- **Маппинг — эвристика по классам Элленберга.** `growth.light` (1–9) → `LOW`/`MEDIUM`/`HIGH`,
+  `growth.soil_humidity` (1–12, именно 12) → фиксированные полосы 3/5/7/10/14/21 дней;
+  `null` → неделя и `MEDIUM`. Слаги Trefle становятся `SpeciesId` через `uuid5` с
+  неизменяемым namespace — это стык локального каталога и внешнего.
+- **Circuit breaker свой, а не `pybreaker`.** Роадмап допускал `tenacity / pybreaker`;
+  выбран проектный `AsyncCircuitBreaker` поверх порта `Clock`: таймаут reset проверяется
+  сдвигом часов (как в Phase 4 вместо freezegun), нет новой зависимости, нет mypy-оверрайда
+  (у `pybreaker.call_async` возврат `Any`). `tenacity` остался ретраем *внутри* breaker'а,
+  поэтому серия ретраев — это одно логическое измерение отказа.
+- **Fallback — снапшот последней удачной синхронизации**, а не отдельный per-species кэш:
+  при недоступности Trefle или открытом breaker'е сага применяет `species:upstream:snapshot`
+  из Valkey, а без снапшота — пустой список, то есть «изменений нет». Ошибка авторизации
+  не маскируется. `fetch_all` никогда не возвращает частичный снапшот: 404/422 по отдельному
+  виду пропускается, но недоступность сервиса обрывает весь fetch.
+- **Создание вида потребовало нового события.** `SpeciesCreated` не существовал, поэтому
+  добавлен `SpeciesAdded` (каталог 25 → 26) и `Species.add(...)`, по образцу `Plant.add`;
+  `Species.create` по-прежнему не пишет событий (реконструкция и тесты). `SpeciesProjection`
+  обрабатывает `SpeciesAdded` тем же upsert'ом, и read-модель впервые получила продюсера.
+- **Инвалидация кэша событийная, а не вызовом внутри саги.** Шаг 3 саги по-прежнему пишет
+  `SpeciesCacheInvalidated` в outbox (`OutboxSpeciesCache`, теперь узкий порт
+  `SpeciesCacheInvalidator`), а `DEL` делает новый choreography-консьюмер
+  `SpeciesCacheConsumer` (группа `<prefix>-species-cache`). Так ни один вызов Valkey не
+  попадает в транзакцию БД, а последовательность шагов и тест компенсации Phase 4 не меняются.
+  Окно «кэш ещё старый» между коммитом и консьюмером ограничено TTL (24ч) и задокументировано.
+- **Компенсация создания удаляет строку, но не событие.** `SpeciesAdded` уже закоммичен в
+  outbox и не может быть отозван — тот же случай, что `PlantOnboarded` в ADR 0005: read-модель
+  может временно хранить вид, которого в write-таблице уже нет, до пересборки read-модели.
+  Зафиксировано в `docs/catalog.md`; write-side каталог при этом возвращается к before-image.
+- **Онбординг не ходит в Trefle.** `SpeciesCatalog` остаётся локальным (docstring порта
+  поправлен): каталог наполняет плановая синхронизация, и сага онбординга не ждёт внешний HTTP.
+- **Провайдеры DI переименованы/добавлены.** `NotificationProvider` → `ValkeyProvider`
+  (один клиент Valkey; канал + `species_cache`), новый `ExternalProvider` (только в
+  `worker_providers`: HTTP-клиент Trefle, лимитер, breaker, `SpeciesSource`) — API не строит
+  Trefle-клиент. Реестр `CONSUMER_TYPES`/`SAGA_COMPONENT_TYPES` дополнен новым консьюмером,
+  и добавлен тест, что реестр покрыт контейнером воркера.
+- **Зависимость:** `aiolimiter>=1.3.0` в `packages/infrastructure` (как и называл роадмап;
+  `py.typed`, поэтому без mypy-оверрайдов). `httpx` и `tenacity` уже были.
+- **Новых таблиц и миграций нет**: кэш и снапшот живут в Valkey, `SpeciesAdded` едет по
+  существующему `catalog.events`, read-модель `read_analytics.species` создана в Phase 3.
+- ADR не добавлялся: `0007`–`0009` зарезервированы за Phase 10. Решения фазы записаны в
+  `docs/catalog.md` и здесь (как в Phase 5, 6 и 8).
+- **Группировка коммитов.** 9.3 и 9.4 ушли одним коммитом: шаг 3 саги, `providers.py`
+  и сам порт `SpeciesCache` общие для обоих, и разрезать их значило бы оставить
+  промежуточный коммит нерабочим. Итог: `feat(infra): trefle acl`,
+  `feat(application): species sync with trefle` (включает кэш и его инвалидацию),
+  `docs: catalog acl and cache close-out`. Circuit breaker попал в первый коммит,
+  потому что клиент без него не собирается.
 
 ---
 

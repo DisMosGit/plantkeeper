@@ -65,7 +65,7 @@ and `JournalStream` is keyed by the same identifier.
 Garden: `PlantAdded`, `PlantRemoved`, `PlantMoved`, `PlantOnboarded`.
 Care: `CareScheduleCreated`, `WateringDue`, `WateringCompleted`, `WateringRescheduled`,
 `CareMissed`, `CareSkipped`.
-Catalog: `SpeciesSyncRequested`, `SpeciesUpdated`, `SpeciesCacheInvalidated`.
+Catalog: `SpeciesSyncRequested`, `SpeciesAdded`, `SpeciesUpdated`, `SpeciesCacheInvalidated`.
 Journal: `JournalEntryAdded`.
 Telemetry: `TelemetryReceived`, `SoilMoistureLow`, `SoilMoistureHigh`,
 `TemperatureAnomaly`, `SensorOffline`.

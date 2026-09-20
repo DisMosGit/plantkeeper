@@ -68,6 +68,16 @@ Versioning: [Semantic Versioning](https://semver.org/).
 - `NotificationView`/`NotificationResponse` gained `payload`, so a client can tell which plant a reminder concerns.
 - Tests: the channel's publish/subscribe/timeout/isolation contract against a real Valkey (integration), the consumer and pusher including redelivery, rebuilt-group, unknown-plant and unread-guard cases (integration), the threshold events in the ingress (unit), and event → notification → long poll end to end (`tests/e2e/test_long_polling.py`, plus Valkey container fixtures in `tests/conftest.py`).
 - `docs/notifications.md`.
+- Phase 9 Trefle ACL: `plantkeeper.infrastructure.external.trefle` holds the wire models (`TrefleListResponse`, `TrefleSpeciesDetail`, `TrefleGrowth`), the mapping into domain values, and `TrefleClient` — the paginating client that reads `/species` and then one detail per species, wraps every request in an `aiolimiter` limiter (`TREFLE_REQUESTS_PER_MINUTE`, default 55), retries transient failures with `tenacity`, and translates HTTP failures into `TrefleAuthError`/`TrefleRecordMissingError`/`TrefleUnavailableError`.
+- The Ellenberg mapping is documented and pinned by tests: `growth.light` (1–9) becomes `LOW`/`MEDIUM`/`HIGH`, and `growth.soil_humidity` (1–12) becomes a watering cadence through fixed bands (3/5/7/10/14/21 days). A Trefle slug becomes a stable `SpeciesId` through `uuid5` with a fixed namespace.
+- `AsyncCircuitBreaker` in `plantkeeper.infrastructure.external.circuit_breaker`: consecutive failures open it, an elapsed reset timeout allows one trial, a success closes it. It reads the `Clock` port, so its timeout is tested by advancing a clock.
+- `TrefleSpeciesSource` adds the fallback: the last successful upstream fetch is cached in Valkey (`species:upstream:snapshot`) and applied when Trefle is unavailable or its breaker is open. A failed fetch never yields a partial snapshot; an auth failure is never papered over.
+- The Valkey species cache: `SpeciesCache`/`SpeciesCacheInvalidator` ports, `ValkeySpeciesCache` (key `species:<uuid>`, JSON `SpeciesView`, `SPECIES_CACHE_TTL_SECONDS` default 24 h), and `GetSpeciesQueryHandler` now reads through it.
+- `SpeciesCacheConsumer` drops cached entries on `SpeciesUpdated` and `SpeciesCacheInvalidated`. It is an ordinary worker consumer with its own group (`<prefix>-species-cache`) and `(consumer_group, event_id)` ledger; the synchronisation's step 3 stays outbox-only, so no Valkey call happens inside a database transaction.
+- `SpeciesAdded`, the catalogue's 26th domain event: `Species.add(...)` records it for an entry the synchronisation creates, and `SpeciesProjection` consumes it with the same upsert as `SpeciesUpdated`. The synchronisation's compensation deletes the species it created.
+- `ExternalProvider` (worker-only) binds the Trefle source, or `UnconfiguredSpeciesSource` when `TREFLE_TOKEN` is empty; `NotificationProvider` became `ValkeyProvider`, which owns the one Valkey client and the species cache built on it.
+- `docs/catalog.md` — the Trefle contract, the mapping tables, the limiter/retry/breaker order, the snapshot fallback, the cache and its invalidation, and the phase's known limits.
+- Tests: the breaker's state machine over a movable clock, the mapping and the wire models, the client's pagination/retry/auth/404/breaker behaviour over `httpx.MockTransport`, the source's fallback, and the cache over a Valkey double (unit); the cache against a real Valkey, the cache consumer's ledger, the synchronisation's creation and its compensation, and the `SpeciesAdded` projection (integration); and the manual `POST /catalog/sync` → Trefle → 30 species → cache invalidation path end to end (`tests/e2e/test_catalog_sync.py`).
 
 ### Changed
 - Scalar value objects (`Location`, `Moisture`, `Temperature`, `LightLevel`, the care intervals) now serialise as the scalar they wrap, so event payloads are flat (`"location": "Shelf"`) instead of nested (`"location": {"value": "Shelf"}`). Validation still accepts both shapes. Identifiers already behaved this way.
@@ -89,6 +99,11 @@ Versioning: [Semantic Versioning](https://semver.org/).
 - The `sagas` package no longer re-exports its registry: the registry imports every consumer, and the journal's consumer imports the package for its base class, so the re-export would close an import cycle. The registry is imported by its own module name.
 - `journal_entries` moved out of the read side's "built before their producer exists" list: a completed watering now produces `JournalEntryAdded`.
 - `docs/events.md` names `JournalEntryConsumer` as `WateringCompleted`'s write-side consumer and lists its consumer group.
+- `SpeciesSyncSaga`'s step 2 now creates a species the local catalogue does not know (`Species.add`) instead of skipping it, and its compensation deletes what the run created. Upstream removal is still not handled: a species that disappears from Trefle stays local.
+- `SpeciesCatalog` (the onboarding saga's ACL) stays deliberately local-only: whether a plant's species is known is answered from `write_catalog`, never by an external HTTP call inside the saga.
+- `NotificationProvider` is now `ValkeyProvider`: it owns the process's Valkey client and exposes both the notification channel and the species cache.
+- `Settings`/`.env.example` gain the `TREFLE_*` variables and `SPECIES_CACHE_TTL_SECONDS`/`SPECIES_SNAPSHOT_TTL_SECONDS`; `packages/infrastructure` gains `aiolimiter`.
+- `docs/events.md`, `docs/sagas.md`, `docs/cqrs.md` and `docs/architecture.md` reflect the catalogue's real producer, its consumers and the 26-event catalogue.
 
 ### Deprecated
 -

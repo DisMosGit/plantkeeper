@@ -1,10 +1,11 @@
 # Architecture
 
-> **Status:** Phases 0–8 are implemented: the write path with its transactional
+> **Status:** Phases 0–9 are implemented: the write path with its transactional
 > outbox, the CQRS read side, the four sagas, the IoT simulator with its telemetry
 > ingress, the Journal as an event-sourced aggregate, the gRPC surface over the
-> same application layer, and notifications delivered by HTTP long polling. Later
-> phases add the Trefle ACL (9) and the assembled contracts (10) — see
+> same application layer, notifications delivered by HTTP long polling, and the
+> Trefle catalogue synchronisation with its circuit breaker and Valkey cache. The
+> remaining phase assembles the contracts (10) — see
 > [`ROADMAP.md`](../ROADMAP.md).
 
 ## Overview

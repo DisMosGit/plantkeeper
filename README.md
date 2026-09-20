@@ -70,8 +70,10 @@ API process talks to the broker, so a slow Kafka cannot slow a request down, and
 nothing in the read side reads a write schema. See [`docs/events.md`](docs/events.md)
 for the topic, header and key contract, [`docs/telemetry.md`](docs/telemetry.md) for
 the raw stream and the readings table, [`docs/cqrs.md`](docs/cqrs.md) for the two
-sides, [`docs/sagas.md`](docs/sagas.md) for the process managers, and
-[`docs/notifications.md`](docs/notifications.md) for HTTP long polling.
+sides, [`docs/sagas.md`](docs/sagas.md) for the process managers,
+[`docs/notifications.md`](docs/notifications.md) for HTTP long polling, and
+[`docs/catalog.md`](docs/catalog.md) for the Trefle synchronisation and the
+species cache.
 
 A client receives its household's notifications by long-polling the write API; the
 worker's `NotificationPusher` wakes it through Valkey, and the endpoint always
@@ -121,6 +123,7 @@ Connection settings are documented in `.env.example`.
 - [`docs/cqrs.md`](docs/cqrs.md) — write schema, read schema, projections
 - [`docs/sagas.md`](docs/sagas.md) — the four process managers, their compensations and their timers
 - [`docs/notifications.md`](docs/notifications.md) — HTTP long polling, the Valkey presence channel and who creates which notification
+- [`docs/catalog.md`](docs/catalog.md) — the Trefle anti-corruption layer, its circuit breaker, and the Valkey species cache
 - [`docs/adr/`](docs/adr/) — architecture decision records
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — branches, commits, local workflow
 - [`CHANGELOG.md`](CHANGELOG.md) — release history

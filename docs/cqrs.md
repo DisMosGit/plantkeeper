@@ -166,10 +166,11 @@ decisions rather than oversights:
 - `TelemetryReceived`, `SoilMoistureLow`, `SoilMoistureHigh`, `TemperatureAnomaly`,
   `SensorOffline` — telemetry projections land in Phase 5.
 
-One read model is built and tested before its producer exists:
-`species`/`plants.species_name` (nothing publishes `SpeciesUpdated` before the Trefle
-synchronisation in Phase 9). Its projection is exercised directly in
-`tests/integration/test_projections.py`.
+`species`/`plants.species_name` used to be in that list: it was built in Phase 3
+before it had a producer, and since Phase 9 the Trefle synchronisation publishes
+`SpeciesAdded` and `SpeciesUpdated` for it. The catalogue's read path also goes
+through the Valkey cache (`docs/catalog.md`); `SpeciesCacheInvalidated` stays
+unprojected because it is the cache's signal, not a read model.
 
 `journal_entries` used to be in that list: since Phase 6 the write side's
 `JournalEntryConsumer` produces `JournalEntryAdded` from a completed watering, and the

@@ -108,11 +108,14 @@ compensated onboarding may leave a stale read-side row until the read model is
 rebuilt. Restoring a species during compensation is itself a catalogue change, so
 it records a `SpeciesUpdated` rather than rewriting history silently.
 
-**Follow-ups.** Phase 5 adds the telemetry consumer that produces
+**Follow-ups.** Phase 5 added the telemetry consumer that produces
 `TelemetryReceived`, which is what makes `AdaptiveWateringSaga` run for real.
-Phase 9 replaces `SpeciesSource` (today a placeholder that returns nothing) and
-`SpeciesCache` (today it publishes `SpeciesCacheInvalidated`) with the Trefle
-client and the Valkey cache. Nothing in Phase 4 needs to change for either.
+Phase 9 replaced `SpeciesSource` (then a placeholder that returned nothing) with
+the Trefle client and its snapshot fallback, and completed `SpeciesCache` with the
+Valkey adapter behind `GetSpeciesQuery` plus the `SpeciesCacheConsumer` that acts
+on `SpeciesCacheInvalidated`. The saga's steps, their order and its compensation
+did not change: the client is bound in the container, and invalidation stayed an
+outbox event. See [docs/catalog.md](../catalog.md).
 
 ## References
 

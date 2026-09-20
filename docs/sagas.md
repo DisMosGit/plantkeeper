@@ -158,14 +158,14 @@ sequenceDiagram
     participant K as catalog.events
     participant T as SpeciesSyncTrigger
     participant S as SpeciesSyncSaga
-    participant U as upstream
+    participant U as Trefle (ACL)
     participant W as write_catalog
 
     K->>T: SpeciesSyncRequested
     T->>S: handle_event
     S->>U: 1. fetch_all()
-    S->>W: 2. diff, update changed, remember before-images
-    W-->>K: SpeciesUpdated
+    S->>W: 2. diff: create unknown, update changed, remember before-images/created ids
+    W-->>K: SpeciesAdded / SpeciesUpdated
     S->>W: 3. invalidate cache
     W-->>K: SpeciesCacheInvalidated
     S-->>K: SagaCompleted
@@ -174,15 +174,17 @@ sequenceDiagram
 | Step | Writes | Compensation |
 |------|--------|--------------|
 | 1. `FetchSpeciesStep` | nothing | nothing |
-| 2. `ApplySpeciesUpdatesStep` | `write_catalog.species` | restore every before-image |
+| 2. `ApplySpeciesUpdatesStep` | `write_catalog.species` | delete every created id, restore every before-image |
 | 3. `InvalidateSpeciesCacheStep` | outbox (`SpeciesCacheInvalidated`) | nothing local to undo |
 
 Step 3 exists so that step 2 can *fail after committing* — which is exactly the
 case compensation is for. The restore goes through `Species.update`, so it records
 a `SpeciesUpdated` of its own: a rollback is a catalogue change its consumers must
-see, not a silent rewrite. Species that are not in the local catalogue are skipped
-with a warning, because the catalogue has no "species created" event yet; creating
-entries is a Phase 9 question for the Trefle adapter.
+see, not a silent rewrite. An upstream species the local catalogue does not know
+is created with `Species.add`, which records `SpeciesAdded`; the compensation
+deletes it again. Species that vanished upstream are left alone — Trefle has no
+"species gone" signal. See [`docs/catalog.md`](catalog.md) for the Trefle
+contract, the mapping and the cache.
 
 ## Idempotency, recovery and observability
 
