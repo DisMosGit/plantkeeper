@@ -115,9 +115,10 @@ class SensorRepository(Repository[Sensor, SensorId], Protocol):
 class JournalEntryRepository(Repository[JournalEntry, JournalEntryId], Protocol):
     """Journal entries of the Journal context.
 
-    The write side is append-only: ``delete`` exists only because the generic
-    repository has it, and the SQL implementation refuses to remove a journal
-    row (see ``docs/domain.md``).
+    The *aggregate* is append-only — :class:`~plantkeeper.domain.journal.entry.JournalEntry`
+    has no mutators. The repository keeps the generic four operations so that a
+    test or an operator can clean up a plant's journal; nothing on the write path
+    updates or removes a row.
     """
 
     async def list_by_plant(self, plant_id: PlantId) -> list[JournalEntry]:
