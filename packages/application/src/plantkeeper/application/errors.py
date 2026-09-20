@@ -33,3 +33,12 @@ class ConcurrentWriteError(ApplicationError):
     type, so the application layer can react (an idempotency race re-reads the
     winner's response) without importing SQLAlchemy.
     """
+
+
+class UnhandledSagaTriggerError(ApplicationError):
+    """A saga was asked to build a context from an event it does not trigger on.
+
+    ``Saga.handle_event`` already filters by :attr:`Saga.trigger_events`, so this
+    is a programming error in a subclass rather than a runtime condition: it makes
+    the narrowing in ``context_from_event`` explicit instead of an ``assert``.
+    """

@@ -105,12 +105,24 @@ ignore_missing_imports = true
 # mode refuses to subclass `Any` (`disallow_subclassing_any`). Only the modules
 # that declare those base classes are relaxed; every concrete command, response
 # and handler is typed against them, so the rest of the project stays strict.
+#
+# Phase 4 adds three more: the orchestration saga base and the step handlers
+# subclass cqrs's `Saga`/`SagaStepHandler`, and the storage adapter implements its
+# `ISagaStorage`. Each of them annotates every method by hand; only the
+# `Any`-inheritance check is off, and the reasons are in
+# `docs/adr/0005-orchestration-vs-choreography.md`.
 module = [
     "plantkeeper.application.commands.base",
     "plantkeeper.application.queries.base",
     "plantkeeper.application.views",
+    "plantkeeper.application.sagas.*",
+    "plantkeeper.infrastructure.persistence.saga_storage",
 ]
 disallow_subclassing_any = false
+# Consequence of the same override: a step method returns the library's
+# `SagaStepResult`, which is `Any` because `cqrs` is untyped. `warn_return_any`
+# would flag every `act`; the body of each step is still annotated and checked.
+warn_return_any = false
 
 [[tool.mypy.overrides]]
 # `aiokafka` ships no `py.typed` marker either. The services never import it —
@@ -218,6 +230,7 @@ modules = [
     "plantkeeper.domain.telemetry",
     "plantkeeper.domain.notifications",
     "plantkeeper.domain.identity",
+    "plantkeeper.domain.saga",
 ]
 
 [[tool.importlinter.contracts]]

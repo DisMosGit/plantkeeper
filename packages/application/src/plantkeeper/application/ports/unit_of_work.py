@@ -25,6 +25,11 @@ from plantkeeper.application.ports.repositories import (
     SensorRepository,
     SpeciesRepository,
 )
+from plantkeeper.application.ports.sagas import (
+    MissedCareWindowRepository,
+    ProcessedEventRepository,
+    SagaStateRepository,
+)
 
 
 @runtime_checkable
@@ -79,6 +84,26 @@ class UnitOfWork(Protocol):
     @property
     def idempotency(self) -> IdempotencyRepository:
         """Stored responses, bound to this transaction's session."""
+        ...
+
+    @property
+    def processed_events(self) -> ProcessedEventRepository:
+        """The consumer ledger, bound to this transaction's session.
+
+        A Kafka consumer claims ``(consumer_group, event_id)`` here and commits
+        it together with the effect of the delivery, which is what makes a
+        redelivery harmless.
+        """
+        ...
+
+    @property
+    def saga_states(self) -> SagaStateRepository:
+        """Saga executions, bound to this transaction's session (read side)."""
+        ...
+
+    @property
+    def missed_care_windows(self) -> MissedCareWindowRepository:
+        """Missed-care grace windows, bound to this transaction's session."""
         ...
 
     async def __aenter__(self) -> Self:

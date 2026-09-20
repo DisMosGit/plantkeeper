@@ -114,6 +114,17 @@ class CareScheduleRepository(Repository[CareSchedule, PlantId], Protocol):
         """
         ...
 
+    async def list_due_without_pending_window(
+        self, until: datetime, *, limit: int
+    ) -> list[CareSchedule]:
+        """Schedules that came due and are not already inside a grace window.
+
+        The missed-care scheduler uses this: without the anti-join it would record
+        ``WateringDue`` again on every poll for a plant whose grace period is still
+        running, and the reminder would never stop.
+        """
+        ...
+
 
 @runtime_checkable
 class SpeciesRepository(Repository[Species, SpeciesId], Protocol):

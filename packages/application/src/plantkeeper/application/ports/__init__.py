@@ -7,6 +7,12 @@ satisfy one (structural typing, checked by ``mypy --strict``).
 
 from __future__ import annotations
 
+from plantkeeper.application.ports.catalog import (
+    SpeciesCache,
+    SpeciesCatalog,
+    SpeciesRecord,
+    SpeciesSource,
+)
 from plantkeeper.application.ports.clock import Clock
 from plantkeeper.application.ports.event_publisher import EventPublisher
 from plantkeeper.application.ports.idempotency import (
@@ -23,6 +29,14 @@ from plantkeeper.application.ports.repositories import (
     SensorRepository,
     SpeciesRepository,
 )
+from plantkeeper.application.ports.sagas import (
+    MissedCareState,
+    MissedCareWindow,
+    MissedCareWindowRepository,
+    ProcessedEventRepository,
+    SagaState,
+    SagaStateRepository,
+)
 from plantkeeper.application.ports.unit_of_work import UnitOfWork
 
 __all__ = (
@@ -33,11 +47,21 @@ __all__ = (
     "IdempotencyRecord",
     "IdempotencyRepository",
     "JournalEntryRepository",
+    "MissedCareState",
+    "MissedCareWindow",
+    "MissedCareWindowRepository",
     "NotificationRepository",
     "OutboxMessage",
     "OutboxRepository",
     "PlantRepository",
+    "ProcessedEventRepository",
+    "SagaState",
+    "SagaStateRepository",
     "SensorRepository",
+    "SpeciesCache",
+    "SpeciesCatalog",
+    "SpeciesRecord",
     "SpeciesRepository",
+    "SpeciesSource",
     "UnitOfWork",
 )
