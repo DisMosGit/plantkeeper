@@ -1,29 +1,23 @@
-"""Testcontainers fixtures for integration tests.
+"""Fixtures for the integration suite.
 
-Containers are opt-in: a fixture only starts Docker when a test requests it, so
-``make test`` stays fast and works without a daemon. Kafka and Valkey fixtures are
-added by the phases that first need them (see ``ROADMAP.md``).
+The Postgres and Kafka containers themselves live in the root ``conftest.py``,
+because the end-to-end suite uses the same ones; what stays here is the
+integration-specific wiring.
 """
 
 from __future__ import annotations
 
-import os
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 
 import pytest
-from testcontainers.community.postgres import PostgresContainer
-
-DEFAULT_POSTGRES_IMAGE = "postgres:18-alpine"
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
-@pytest.fixture(scope="session")
-def postgres_image() -> str:
-    """Docker image used for the integration Postgres container."""
-    return os.getenv("POSTGRES_IMAGE", DEFAULT_POSTGRES_IMAGE)
-
-
-@pytest.fixture(scope="session")
-def postgres_container(postgres_image: str) -> Iterator[PostgresContainer]:
-    """Session-scoped Postgres, started only when a test requests this fixture."""
-    with PostgresContainer(postgres_image) as container:
-        yield container
+@pytest.fixture
+async def session_factory(database: str) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    """A session factory over the empty, migrated integration database."""
+    engine = create_async_engine(database)
+    try:
+        yield async_sessionmaker(engine, expire_on_commit=False)
+    finally:
+        await engine.dispose()
