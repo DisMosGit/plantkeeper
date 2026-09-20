@@ -6,8 +6,11 @@ requires-python = ">=3.14"
 dependencies = [
     "plantkeeper-application",
     "plantkeeper-infrastructure",
+    "dishka>=1.10",
     "fastapi>=0.141",
     "grpcio>=1.84",
+    "pydantic>=2.13",
+    "python-cqrs>=4.13",
     "uvicorn[standard]>=0.53",
 ]
 

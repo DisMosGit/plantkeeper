@@ -1088,19 +1088,25 @@ name = "plantkeeper-api"
 version = "0.1.0"
 source = { editable = "apps/api" }
 dependencies = [
+    { name = "dishka" },
     { name = "fastapi" },
     { name = "grpcio" },
     { name = "plantkeeper-application" },
     { name = "plantkeeper-infrastructure" },
+    { name = "pydantic" },
+    { name = "python-cqrs" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "dishka", specifier = ">=1.10" },
     { name = "fastapi", specifier = ">=0.141" },
     { name = "grpcio", specifier = ">=1.84" },
     { name = "plantkeeper-application", editable = "packages/application" },
     { name = "plantkeeper-infrastructure", editable = "packages/infrastructure" },
+    { name = "pydantic", specifier = ">=2.13" },
+    { name = "python-cqrs", specifier = ">=4.13" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.53" },
 ]
 
