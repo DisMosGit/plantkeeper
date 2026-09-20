@@ -63,6 +63,21 @@ def topics_for(events: tuple[type[DomainEvent], ...]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(EVENT_TOPICS[event] for event in events))
 
 
+def channel_title(topic: str, consumer_group: str) -> str:
+    """Return the unique AsyncAPI title of one ``(topic, group)`` subscription.
+
+    The title is what keeps the generated document honest: one Kafka topic is
+    consumed by several groups, and AsyncAPI keys a channel by this string.
+    """
+    return f"{topic} to {consumer_group}"
+
+
+def consumer_description(consumer_type: type[Consumer]) -> str:
+    """Return the AsyncAPI description of one consumer's subscription."""
+    handled = ", ".join(event.__name__ for event in consumer_type.handled_types)
+    return f"{consumer_type.__name__} handles {handled}"
+
+
 def register_consumers(
     broker: KafkaBroker, *, container: AsyncContainer, settings: Settings
 ) -> None:
@@ -76,6 +91,13 @@ def register_consumers(
                 # A new consumer group replays its topic from the beginning; the
                 # ledger makes that a safe way to rebuild a consumer's state.
                 auto_offset_reset="earliest",
+                # FastStream derives an AsyncAPI channel's key from the title and
+                # falls back to the handler's function name, which every handler
+                # here shares (``handle``). Without a title, several groups on one
+                # topic would collapse into a single ``<topic>:Handle`` channel and
+                # the document would silently drop all but the last of them.
+                title=channel_title(topic, consumer_group),
+                description=consumer_description(consumer_type),
             )(
                 build_consumer_handler(
                     consumer_type, container=container, consumer_group=consumer_group
@@ -134,6 +156,8 @@ def register_telemetry_ingest(
         settings.telemetry_raw_topic,
         group_id=settings.telemetry_ingest_consumer_group,
         auto_offset_reset=TELEMETRY_INGEST_OFFSET_RESET,
+        title=channel_title(settings.telemetry_raw_topic, settings.telemetry_ingest_consumer_group),
+        description="TelemetryIngestConsumer validates a raw measurement and stores it",
     )(build_telemetry_ingest_handler(container=container))
 
 

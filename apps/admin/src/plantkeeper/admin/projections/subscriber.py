@@ -52,6 +52,12 @@ def register_projections(broker: KafkaBroker, *, prefix: str) -> None:
                 # A new consumer group replays its topic from the beginning; with
                 # the ledger that is what makes a rebuilt read table possible.
                 auto_offset_reset="earliest",
+                # FastStream keys an AsyncAPI channel by the subscription's title
+                # and otherwise falls back to the handler's function name, which
+                # every handler here shares (``handle``). Without this, several
+                # projections on one topic would collapse into one channel.
+                title=f"{topic} to {consumer_group}",
+                description=f"{projection.name} projection",
             )(build_handler(projection, consumer_group=consumer_group))
 
 

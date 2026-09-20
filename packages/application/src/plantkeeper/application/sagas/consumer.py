@@ -65,6 +65,14 @@ class Consumer(ABC):
     application layer must not import it.
     """
 
+    saga_name: ClassVar[str | None] = None
+    """The orchestration saga this consumer triggers, when it is a trigger.
+
+    ``None`` for a choreography consumer, which has no coordinator. A trigger
+    overrides it, and the registry's reporter and the contract catalogue read it
+    from here rather than off the subclass's constructor annotation.
+    """
+
     def __init__(self, unit_of_work: UnitOfWork) -> None:
         self._unit_of_work = unit_of_work
 

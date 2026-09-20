@@ -193,6 +193,13 @@ class OnboardPlantTrigger(Consumer):
 
     name = "onboard-plant"
     handled_types = (PlantAdded,)
+    saga_name = "OnboardPlantSaga"
+    """The saga this trigger starts.
+
+    Declared rather than read off the constructor's annotation: the registry and
+    the contract catalogue both need the name without resolving the saga from a
+    container.
+    """
 
     def __init__(self, unit_of_work: UnitOfWork, saga: OnboardPlantSaga) -> None:
         super().__init__(unit_of_work)

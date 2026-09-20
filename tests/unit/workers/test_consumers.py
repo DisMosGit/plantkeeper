@@ -29,18 +29,25 @@ Subscriber = Callable[[KafkaMessage], Awaitable[None]]
 
 
 class FakeBroker:
-    """Records ``(topic, group_id, handler)`` for every subscription."""
+    """Records ``(topic, group_id, title, auto_offset_reset, handler)`` per subscription."""
 
     def __init__(self) -> None:
-        self.routes: list[tuple[str, str, str, Subscriber]] = []
+        self.routes: list[tuple[str, str, str, str, Subscriber]] = []
 
     def subscriber(
-        self, topic: str, *, group_id: str, auto_offset_reset: str
+        self,
+        topic: str,
+        *,
+        group_id: str,
+        auto_offset_reset: str,
+        title: str,
+        description: str,
     ) -> Callable[[Subscriber], Subscriber]:
         """Stand in for FastStream's decorator-returning ``subscriber``."""
+        del description  # Only the title keys the generated channel.
 
         def decorator(handler: Subscriber) -> Subscriber:
-            self.routes.append((topic, group_id, auto_offset_reset, handler))
+            self.routes.append((topic, group_id, title, auto_offset_reset, handler))
             return handler
 
         return decorator
@@ -60,13 +67,34 @@ def test_every_consumer_is_subscribed_to_each_of_its_topics_once() -> None:
         settings=Settings(worker_consumer_group_prefix="test-worker"),
     )
 
-    subscribed = {(topic, group_id) for topic, group_id, _, _ in broker.routes}
+    subscribed = {(topic, group_id) for topic, group_id, _, _, _ in broker.routes}
     expected = {
         (EVENT_TOPICS[event_type], f"test-worker-{consumer_type.name}")
         for consumer_type in WORKER_CONSUMER_TYPES
         for event_type in consumer_type.handled_types
     }
     assert subscribed == expected
+
+
+def test_every_subscription_has_a_unique_asyncapi_title() -> None:
+    """One Kafka topic is consumed by several groups; the title keeps them apart.
+
+    FastStream keys a generated AsyncAPI channel by the subscription's title and
+    otherwise falls back to the handler's function name, which every handler here
+    shares, so a duplicate title silently drops a channel from the document.
+    """
+    broker = FakeBroker()
+
+    register_consumers(
+        cast("KafkaBroker", broker),
+        container=cast("AsyncContainer", None),
+        settings=Settings(worker_consumer_group_prefix="test-worker"),
+    )
+
+    titles = [title for _, _, title, _, _ in broker.routes]
+    assert len(titles) == len(set(titles))
+    for topic, group_id, title, _, _ in broker.routes:
+        assert title == f"{topic} to {group_id}"
 
 
 def test_every_subscription_replays_from_the_beginning() -> None:
@@ -79,7 +107,7 @@ def test_every_subscription_replays_from_the_beginning() -> None:
         settings=Settings(worker_consumer_group_prefix="test-worker"),
     )
 
-    assert {auto_offset_reset for _, _, auto_offset_reset, _ in broker.routes} == {"earliest"}
+    assert {auto_offset_reset for _, _, _, auto_offset_reset, _ in broker.routes} == {"earliest"}
 
 
 def test_the_telemetry_ingress_is_subscribed_to_the_raw_topic_alone() -> None:
@@ -95,7 +123,7 @@ def test_the_telemetry_ingress_is_subscribed_to_the_raw_topic_alone() -> None:
     )
 
     assert len(broker.routes) == 1
-    topic, group_id, _auto_offset_reset, _handler = broker.routes[0]
+    topic, group_id, _title, _auto_offset_reset, _handler = broker.routes[0]
     assert (topic, group_id) == (TELEMETRY_RAW, "test-telemetry-ingest")
 
 
@@ -110,7 +138,7 @@ def test_the_telemetry_ingress_starts_at_the_live_edge() -> None:
     )
 
     assert TELEMETRY_INGEST_OFFSET_RESET == "latest"
-    assert broker.routes[0][2] == "latest"
+    assert broker.routes[0][3] == "latest"
 
 
 def test_the_raw_topic_is_not_in_the_event_catalogue() -> None:

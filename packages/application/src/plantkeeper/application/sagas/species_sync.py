@@ -237,6 +237,8 @@ class SpeciesSyncTrigger(Consumer):
 
     name = "species-sync"
     handled_types: ClassVar[tuple[type[DomainEvent], ...]] = (SpeciesSyncRequested,)
+    saga_name = "SpeciesSyncSaga"
+    """The saga this trigger starts; see ``OnboardPlantTrigger.saga_name``."""
 
     def __init__(self, unit_of_work: UnitOfWork, saga: SpeciesSyncSaga) -> None:
         super().__init__(unit_of_work)

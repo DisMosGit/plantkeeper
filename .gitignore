@@ -262,6 +262,8 @@ docs/_build/
 docs/coverage.html
 docs/openapi.json
 docs/asyncapi.json
+docs/asyncapi-write.json
+docs/asyncapi-read.json
 docs/diagrams/*.png
 docs/diagrams/*.svg
 

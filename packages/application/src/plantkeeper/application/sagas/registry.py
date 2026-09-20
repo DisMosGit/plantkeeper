@@ -51,6 +51,14 @@ SAGA_TYPES: tuple[type[Saga], ...] = (
 )
 """The orchestration sagas, one per saga context."""
 
+SAGA_NAMES: tuple[str, ...] = tuple(saga.__name__ for saga in SAGA_TYPES)
+"""Their class names, in the same order.
+
+A trigger binds its saga by class, and a reporter that has no container to
+resolve one needs the names alone (the contract catalogue labels each trigger with
+the saga it starts).
+"""
+
 WORKER_CONSUMER_TYPES: tuple[type[Consumer], ...] = CONSUMER_TYPES + TRIGGER_TYPES
 """Everything the worker subscribes to."""
 

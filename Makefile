@@ -9,7 +9,7 @@ SHELL := /bin/bash
 
 COMPOSE := docker compose
 
-.PHONY: help dev up down clean lint format test test-unit test-domain test-integration test-e2e migrate api proto grpc admin admin-static workers iot iot-drought iot-dry-run
+.PHONY: help dev up down clean lint format test test-unit test-domain test-integration test-e2e coverage migrate api proto grpc admin admin-static workers iot iot-drought iot-dry-run contracts diagrams
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -52,6 +52,14 @@ test-integration: ## Integration tests (needs Docker)
 test-e2e: proto ## End-to-end tests (start their own containers; needs Docker)
 	uv run pytest tests/e2e -m slow
 
+coverage: proto ## Full run, then the per-layer floors (domain 90, application 80, infrastructure 70)
+	uv run pytest --cov=plantkeeper --cov-report=term-missing --cov-report=html:docs/coverage.html
+	@echo "--- layers (floor: domain 90, application 80, infrastructure 70) ---"
+	uv run coverage report --include="*/plantkeeper/domain/*"
+	uv run coverage report --include="*/plantkeeper/application/*"
+	uv run coverage report --include="*/plantkeeper/infrastructure/*"
+	@echo "HTML report: docs/coverage.html"
+
 migrate: ## Apply all migrations (Alembic write schema + Django read schema)
 	uv run alembic upgrade head
 	uv run python apps/admin/manage.py migrate
@@ -61,6 +69,12 @@ api: ## Run the FastAPI write API on :8000
 
 proto: ## Regenerate the gRPC Python stubs from proto/ (they are not committed)
 	uv run python tools/protogen.py
+
+contracts: ## Export the OpenAPI/AsyncAPI documents and render the Mermaid diagrams
+	uv run python tools/contracts.py
+
+diagrams: ## Render docs/diagrams/*.md from the event and saga registries
+	uv run python tools/contracts.py --diagrams-only
 
 grpc: proto ## Run the gRPC write API on :50051
 	uv run python -m plantkeeper.api.grpc

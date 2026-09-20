@@ -18,6 +18,14 @@ from plantkeeper.api.errors import register_exception_handlers
 from plantkeeper.api.rest.routers import build_api_router
 from plantkeeper.infrastructure.di.providers import api_providers
 
+VERSION = "0.1.0"
+"""The API's contract version, stamped into the served OpenAPI document.
+
+One constant for the served document and the exported artefact
+(``plantkeeper.api.openapi``), so the two cannot disagree; ``tools/contracts.py``
+checks it against the workspace's ``pyproject.toml``.
+"""
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -42,7 +50,7 @@ def create_app(*, providers: Sequence[Provider] | None = None) -> FastAPI:
     """
     app = FastAPI(
         title="PlantKeeper API",
-        version="0.1.0",
+        version=VERSION,
         summary="Write side of the PlantKeeper plant care platform.",
         lifespan=lifespan,
     )
