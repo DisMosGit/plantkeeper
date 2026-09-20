@@ -15,6 +15,11 @@ from plantkeeper.application.ports.catalog import (
 )
 from plantkeeper.application.ports.clock import Clock
 from plantkeeper.application.ports.event_publisher import EventPublisher
+from plantkeeper.application.ports.event_store import (
+    EventStoreRepository,
+    JournalSnapshotRepository,
+    StoredEvent,
+)
 from plantkeeper.application.ports.idempotency import (
     IdempotencyRecord,
     IdempotencyRepository,
@@ -43,10 +48,12 @@ __all__ = (
     "CareScheduleRepository",
     "Clock",
     "EventPublisher",
+    "EventStoreRepository",
     "HouseholdRepository",
     "IdempotencyRecord",
     "IdempotencyRepository",
     "JournalEntryRepository",
+    "JournalSnapshotRepository",
     "MissedCareState",
     "MissedCareWindow",
     "MissedCareWindowRepository",
@@ -63,5 +70,6 @@ __all__ = (
     "SpeciesRecord",
     "SpeciesRepository",
     "SpeciesSource",
+    "StoredEvent",
     "UnitOfWork",
 )

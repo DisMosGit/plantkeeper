@@ -8,9 +8,13 @@ columns store their *value* rather than the member name.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
+import pytest
 from pydantic import JsonValue
 
+from plantkeeper.application.errors import EventStoreCorruptionError
+from plantkeeper.application.ports.event_store import StoredEvent
 from plantkeeper.application.ports.idempotency import IdempotencyRecord
 from plantkeeper.domain.base import DomainEvent
 from plantkeeper.domain.care.schedule import CareSchedule
@@ -28,6 +32,8 @@ from plantkeeper.domain.identifiers import (
     SpeciesId,
 )
 from plantkeeper.domain.journal.entry import JournalEntry
+from plantkeeper.domain.journal.events import JournalEntryAdded
+from plantkeeper.domain.journal.state import JournalEntryState, JournalState
 from plantkeeper.domain.journal.values import JournalEntryType
 from plantkeeper.domain.notifications.notification import Notification
 from plantkeeper.domain.notifications.values import NotificationType
@@ -37,6 +43,7 @@ from plantkeeper.infrastructure.messaging.topics import GARDEN_EVENTS
 from plantkeeper.infrastructure.persistence.mappers import (
     care_schedule_to_domain,
     care_schedule_to_model,
+    event_store_model_from_event,
     household_to_domain,
     household_to_model,
     idempotency_to_domain,
@@ -51,8 +58,11 @@ from plantkeeper.infrastructure.persistence.mappers import (
     plant_to_model,
     sensor_to_domain,
     sensor_to_model,
+    snapshot_model_from_state,
     species_to_domain,
     species_to_model,
+    state_from_snapshot_model,
+    stored_event_from_model,
 )
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
@@ -256,3 +266,97 @@ def test_an_idempotency_record_survives_a_round_trip() -> None:
     restored = idempotency_to_domain(idempotency_to_model(record))
 
     assert restored == record
+
+
+def a_journal_entry_added(plant_id: PlantId) -> JournalEntryAdded:
+    """One event the store would hold for ``plant_id``."""
+    return JournalEntryAdded(
+        entry_id=JournalEntryId.new(),
+        plant_id=plant_id,
+        entry_type=JournalEntryType.WATERING,
+        note="Watered",
+        entry_occurred_at=NOW,
+        occurred_at=LATER,
+    )
+
+
+def test_an_event_store_row_carries_the_event_document() -> None:
+    plant_id = PlantId.new()
+    event = a_journal_entry_added(plant_id)
+
+    model = event_store_model_from_event(event, stream_id=plant_id, version=3)
+
+    assert model.stream_id == plant_id.value
+    assert model.version == 3
+    assert model.event_id == event.event_id
+    assert model.event_type == "JournalEntryAdded"
+    assert model.occurred_at == LATER
+    assert model.payload["entry_id"] == str(event.entry_id)
+    assert model.payload["entry_type"] == "watering"
+    assert model.payload["note"] == "Watered"
+
+
+def test_a_stored_event_rebuilds_the_domain_event() -> None:
+    plant_id = PlantId.new()
+    event = a_journal_entry_added(plant_id)
+    model = event_store_model_from_event(event, stream_id=plant_id, version=1)
+    model.global_position = 11
+
+    stored = stored_event_from_model(model)
+
+    assert stored == StoredEvent(
+        stream_id=plant_id,
+        version=1,
+        global_position=11,
+        event=event,
+    )
+
+
+def test_an_unknown_stored_event_type_is_corruption() -> None:
+    plant_id = PlantId.new()
+    model = event_store_model_from_event(
+        a_journal_entry_added(plant_id), stream_id=plant_id, version=1
+    )
+    model.event_type = "SomethingElseHappened"
+
+    with pytest.raises(EventStoreCorruptionError):
+        stored_event_from_model(model)
+
+
+def test_a_stored_event_that_no_longer_validates_is_corruption() -> None:
+    plant_id = PlantId.new()
+    model = event_store_model_from_event(
+        a_journal_entry_added(plant_id), stream_id=plant_id, version=1
+    )
+    model.payload = cast("dict[str, JsonValue]", {"entry_id": str(JournalEntryId.new())})
+
+    with pytest.raises(EventStoreCorruptionError):
+        stored_event_from_model(model)
+
+
+def test_a_journal_state_survives_a_snapshot_round_trip() -> None:
+    plant_id = PlantId.new()
+    state = JournalState(
+        plant_id=plant_id,
+        version=2,
+        entries=(
+            JournalEntryState(
+                entry_id=JournalEntryId.new(),
+                entry_type=JournalEntryType.WATERING,
+                occurred_at=NOW,
+                note=None,
+            ),
+        ),
+    )
+
+    restored = state_from_snapshot_model(snapshot_model_from_state(state))
+
+    assert restored == state
+
+
+def test_a_snapshot_that_no_longer_validates_is_corruption() -> None:
+    model = snapshot_model_from_state(JournalState(plant_id=PlantId.new(), version=1))
+    model.state = cast("dict[str, JsonValue]", {"plant_id": "not-a-uuid"})
+
+    with pytest.raises(EventStoreCorruptionError):
+        state_from_snapshot_model(model)

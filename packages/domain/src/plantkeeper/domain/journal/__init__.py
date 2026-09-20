@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from plantkeeper.domain.journal.aggregate import JournalAggregate
 from plantkeeper.domain.journal.entry import JournalEntry
 from plantkeeper.domain.journal.errors import (
     JournalEntryAlreadyAppendedError,
@@ -9,15 +10,19 @@ from plantkeeper.domain.journal.errors import (
     JournalError,
 )
 from plantkeeper.domain.journal.events import JournalEntryAdded
+from plantkeeper.domain.journal.state import JournalEntryState, JournalState
 from plantkeeper.domain.journal.stream import JournalStream
 from plantkeeper.domain.journal.values import JournalEntryType
 
 __all__ = [
+    "JournalAggregate",
     "JournalEntry",
     "JournalEntryAdded",
     "JournalEntryAlreadyAppendedError",
     "JournalEntryPlantMismatchError",
+    "JournalEntryState",
     "JournalEntryType",
     "JournalError",
+    "JournalState",
     "JournalStream",
 ]

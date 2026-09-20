@@ -8,6 +8,10 @@ from plantkeeper.infrastructure.persistence.repositories.care import (
 from plantkeeper.infrastructure.persistence.repositories.catalog import (
     SqlAlchemySpeciesRepository,
 )
+from plantkeeper.infrastructure.persistence.repositories.event_store import (
+    SqlAlchemyEventStoreRepository,
+    SqlAlchemyJournalSnapshotRepository,
+)
 from plantkeeper.infrastructure.persistence.repositories.garden import (
     SqlAlchemyHouseholdRepository,
     SqlAlchemyPlantRepository,
@@ -35,9 +39,11 @@ from plantkeeper.infrastructure.persistence.repositories.telemetry import (
 
 __all__ = (
     "SqlAlchemyCareScheduleRepository",
+    "SqlAlchemyEventStoreRepository",
     "SqlAlchemyHouseholdRepository",
     "SqlAlchemyIdempotencyRepository",
     "SqlAlchemyJournalEntryRepository",
+    "SqlAlchemyJournalSnapshotRepository",
     "SqlAlchemyMissedCareWindowRepository",
     "SqlAlchemyNotificationRepository",
     "SqlAlchemyOutboxRepository",

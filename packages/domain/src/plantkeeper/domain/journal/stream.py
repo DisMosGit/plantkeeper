@@ -42,6 +42,17 @@ class JournalStream:
         """Append one entry, rejecting a foreign plant or a duplicate entry."""
         self._register(entry)
 
+    def find(self, entry_id: JournalEntryId) -> JournalEntry | None:
+        """Return the entry with ``entry_id``, or ``None`` when the stream has none.
+
+        An append-only stream cannot be "upserted", so this is how a caller that owns
+        an entry's identity makes a replay a no-op instead of a second fact.
+        """
+        for entry in self._entries:
+            if entry.id == entry_id:
+                return entry
+        return None
+
     def _register(self, entry: JournalEntry) -> None:
         if entry.plant_id != self._plant_id:
             raise JournalEntryPlantMismatchError(

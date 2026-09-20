@@ -23,8 +23,12 @@ from plantkeeper.infrastructure.persistence.mappers.garden import (
     plant_to_model,
 )
 from plantkeeper.infrastructure.persistence.mappers.journal import (
+    event_store_model_from_event,
     journal_entry_to_domain,
     journal_entry_to_model,
+    snapshot_model_from_state,
+    state_from_snapshot_model,
+    stored_event_from_model,
 )
 from plantkeeper.infrastructure.persistence.mappers.notifications import (
     notification_to_domain,
@@ -49,6 +53,7 @@ from plantkeeper.infrastructure.persistence.mappers.telemetry import (
 __all__ = (
     "care_schedule_to_domain",
     "care_schedule_to_model",
+    "event_store_model_from_event",
     "household_to_domain",
     "household_to_model",
     "idempotency_to_domain",
@@ -66,6 +71,9 @@ __all__ = (
     "saga_state_to_domain",
     "sensor_to_domain",
     "sensor_to_model",
+    "snapshot_model_from_state",
     "species_to_domain",
     "species_to_model",
+    "state_from_snapshot_model",
+    "stored_event_from_model",
 )

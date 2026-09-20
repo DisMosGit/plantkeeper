@@ -19,6 +19,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from plantkeeper.application.errors import ConcurrentWriteError
+from plantkeeper.application.ports.event_store import (
+    EventStoreRepository,
+    JournalSnapshotRepository,
+)
 from plantkeeper.application.ports.idempotency import IdempotencyRepository
 from plantkeeper.application.ports.outbox import OutboxRepository
 from plantkeeper.application.ports.repositories import (
@@ -41,6 +45,10 @@ from plantkeeper.infrastructure.persistence.repositories.care import (
 )
 from plantkeeper.infrastructure.persistence.repositories.catalog import (
     SqlAlchemySpeciesRepository,
+)
+from plantkeeper.infrastructure.persistence.repositories.event_store import (
+    SqlAlchemyEventStoreRepository,
+    SqlAlchemyJournalSnapshotRepository,
 )
 from plantkeeper.infrastructure.persistence.repositories.garden import (
     SqlAlchemyHouseholdRepository,
@@ -89,6 +97,8 @@ class SqlAlchemyUnitOfWork:
         self._sensors = SqlAlchemySensorRepository(session, self._tracker)
         self._telemetry = SqlAlchemyTelemetryRepository(session)
         self._journal_entries = SqlAlchemyJournalEntryRepository(session, self._tracker)
+        self._event_store = SqlAlchemyEventStoreRepository(session)
+        self._journal_snapshots = SqlAlchemyJournalSnapshotRepository(session)
         self._notifications = SqlAlchemyNotificationRepository(session, self._tracker)
         self._outbox = SqlAlchemyOutboxRepository(session)
         self._idempotency = SqlAlchemyIdempotencyRepository(session)
@@ -130,6 +140,16 @@ class SqlAlchemyUnitOfWork:
     def journal_entries(self) -> JournalEntryRepository:
         """Journal entries, bound to this transaction."""
         return self._journal_entries
+
+    @property
+    def event_store(self) -> EventStoreRepository:
+        """The journal's event stream, bound to this transaction."""
+        return self._event_store
+
+    @property
+    def journal_snapshots(self) -> JournalSnapshotRepository:
+        """Journal checkpoints, bound to this transaction."""
+        return self._journal_snapshots
 
     @property
     def notifications(self) -> NotificationRepository:

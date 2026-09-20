@@ -17,7 +17,11 @@ from plantkeeper.infrastructure.persistence.models.care import (
 )
 from plantkeeper.infrastructure.persistence.models.catalog import SpeciesModel
 from plantkeeper.infrastructure.persistence.models.garden import HouseholdModel, PlantModel
-from plantkeeper.infrastructure.persistence.models.journal import JournalEntryModel
+from plantkeeper.infrastructure.persistence.models.journal import (
+    EventStoreModel,
+    JournalEntryModel,
+    JournalSnapshotModel,
+)
 from plantkeeper.infrastructure.persistence.models.notifications import NotificationModel
 from plantkeeper.infrastructure.persistence.models.shared import (
     IdempotencyKeyModel,
@@ -33,9 +37,11 @@ from plantkeeper.infrastructure.persistence.models.telemetry import (
 
 __all__ = (
     "CareScheduleModel",
+    "EventStoreModel",
     "HouseholdModel",
     "IdempotencyKeyModel",
     "JournalEntryModel",
+    "JournalSnapshotModel",
     "MissedCareWindowModel",
     "NotificationModel",
     "OutboxModel",

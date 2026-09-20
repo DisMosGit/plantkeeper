@@ -14,6 +14,10 @@ from __future__ import annotations
 from types import TracebackType
 from typing import Protocol, Self, runtime_checkable
 
+from plantkeeper.application.ports.event_store import (
+    EventStoreRepository,
+    JournalSnapshotRepository,
+)
 from plantkeeper.application.ports.idempotency import IdempotencyRepository
 from plantkeeper.application.ports.outbox import OutboxRepository
 from plantkeeper.application.ports.repositories import (
@@ -76,6 +80,21 @@ class UnitOfWork(Protocol):
     @property
     def journal_entries(self) -> JournalEntryRepository:
         """Journal entries, bound to this transaction's session."""
+        ...
+
+    @property
+    def event_store(self) -> EventStoreRepository:
+        """The Journal's event stream, bound to this transaction's session.
+
+        The append and the outbox row that announces it travel in this one
+        transaction, so a stored fact and its publication appear together or not at
+        all (``docs/event-sourcing.md``).
+        """
+        ...
+
+    @property
+    def journal_snapshots(self) -> JournalSnapshotRepository:
+        """Journal checkpoints, bound to this transaction's session."""
         ...
 
     @property

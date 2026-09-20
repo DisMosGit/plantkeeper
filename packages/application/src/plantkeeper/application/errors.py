@@ -35,6 +35,27 @@ class ConcurrentWriteError(ApplicationError):
     """
 
 
+class EventStoreConcurrencyError(ConcurrentWriteError):
+    """An append lost the race for a stream version.
+
+    The event store's ``(stream_id, version)`` key *is* its optimistic lock, so
+    this is the same kind of failure as :class:`ConcurrentWriteError` — two writers
+    read version N and both tried to append N+1. It stays a subclass so a caller
+    that only knows about concurrent writes still catches it.
+    """
+
+
+class EventStoreCorruptionError(ApplicationError):
+    """A stored stream cannot be replayed.
+
+    Raised for an unknown ``event_type``, a payload that no longer validates, a
+    version gap, or an event that does not belong in the stream it was read from.
+    Unlike a Kafka delivery, a stored stream is local and must be fully replayable,
+    so this is never skipped: a journal that silently drops a fact is worse than
+    one that refuses to load.
+    """
+
+
 class UnhandledSagaTriggerError(ApplicationError):
     """A saga was asked to build a context from an event it does not trigger on.
 
