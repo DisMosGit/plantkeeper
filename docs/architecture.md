@@ -1,8 +1,10 @@
 # Architecture
 
-> **Status:** Phase 0 skeleton. The structure and the decisions behind it are recorded
-> here; the diagrams and the detail are filled in by the phases that implement them —
-> see [`ROADMAP.md`](../ROADMAP.md).
+> **Status:** Phases 0–5 are implemented: the write path with its transactional
+> outbox, the CQRS read side, the four sagas and the IoT simulator with its
+> telemetry ingress. Later phases add Event Sourcing for the Journal (6), gRPC (7),
+> long-polling notifications (8), the Trefle ACL (9) and the assembled contracts
+> (10) — see [`ROADMAP.md`](../ROADMAP.md).
 
 ## Overview
 
@@ -42,9 +44,7 @@ graph LR
 ```
 
 *(Placeholder: the full context map with ACL and event-carried state transfer is
-documented in Phase 10.)*
-
-## Layered architecture
+documented in Phase 10.)*## Layered architecture
 
 ```
 domain          <- pure: aggregates, value objects, domain events. No I/O.
@@ -81,6 +81,30 @@ aggregate-derived key, at-least-once delivery and the dead-letter path — is in
 Consumers are idempotent on `(consumer_group, event_id)`, so at-least-once delivery does
 not produce duplicates.
 
+## Telemetry path
+
+`IoT simulator -> telemetry.raw -> telemetry ingress -> sensor_readings + outbox -> relay -> telemetry.events -> AdaptiveWateringSaga`
+
+The simulator in `tools/iot-simulator` is a producer of raw measurements, not of domain
+events: it knows nothing about plants, so `telemetry.raw` carries
+`sensor_id`/`recorded_at`/`moisture`/`temperature`/`light` and nothing else. The write
+side's **telemetry ingress** (`plantkeeper.application.telemetry`, subscribed by
+`apps/workers`) does what the simulator cannot:
+
+1. validates the raw document against the domain's own value objects;
+2. resolves `sensor_id -> plant_id` through the sensor registry, and drops a reading
+   from a sensor nobody registered;
+3. stores the reading in the partition-by-month `write_telemetry.sensor_readings`,
+   whose `(sensor_id, recorded_at)` key is the idempotency that a redelivery or a
+   replay cannot break;
+4. appends the `TelemetryReceived` a newly stored reading produces to the transactional
+   outbox, in the same transaction — so the saga's input arrives on the same
+   at-least-once, one-writer path as every other domain event, and a redelivery that
+   inserts no row announces nothing either.
+
+`docs/telemetry.md` holds the envelope, the partitioning scheme and the runbook;
+`docs/iot-simulator.md` holds the model and the CLI.
+
 ## Local topology
 
 | Service | Endpoint | Provided by |
@@ -95,5 +119,10 @@ not produce duplicates.
 ## References
 
 - [`docs/domain.md`](domain.md) — ubiquitous language, aggregates, invariants
+- [`docs/events.md`](events.md) — the event catalogue and its transport
+- [`docs/cqrs.md`](cqrs.md) — the read side's projections
+- [`docs/sagas.md`](sagas.md) — the four process managers
+- [`docs/telemetry.md`](telemetry.md) — the raw envelope and the readings table
+- [`docs/iot-simulator.md`](iot-simulator.md) — the physical model and the CLI
 - [`docs/adr/`](adr/) — architecture decision records
 - [`ROADMAP.md`](../ROADMAP.md) — phases and their Definition of Done

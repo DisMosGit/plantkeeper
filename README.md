@@ -48,8 +48,9 @@ uv sync --all-packages    # install the workspace
 make dev                  # start Kafka (KRaft), Postgres, Valkey, Redpanda Console
 make migrate              # apply the schemas (Alembic write_*, Django read_analytics)
 make api                  # FastAPI on http://localhost:8000 (OpenAPI at /docs)
-make workers              # outbox relay + the four sagas' consumers and timers
+make workers              # outbox relay + telemetry ingress + the sagas and their timers
 make admin                # read side on http://localhost:8001/admin/ (projections + Django Admin)
+make iot                  # the IoT simulator: 20 sensors into telemetry.raw
 make lint                 # ruff + mypy + import-linter
 make test                 # pytest
 make clean                # stop infra and drop volumes
@@ -57,14 +58,22 @@ make clean                # stop infra and drop volumes
 
 The system runs as three processes on purpose. `make api` answers HTTP and commits
 each command together with the events it produced into the outbox; `make workers`
-runs the relay that publishes those events to Kafka, the write-side consumers that
-run the sagas, and their timers (the missed-care tick, the daily catalogue trigger
-and saga recovery); `make admin` consumes them into the `read_analytics` schema and
-serves Django Admin over it. Nothing in the API process talks to the broker, so a
-slow Kafka cannot slow a request down, and nothing in the read side reads a write
-schema. See [`docs/events.md`](docs/events.md) for the topic, header and key
-contract, [`docs/cqrs.md`](docs/cqrs.md) for the two sides, and
+runs the relay that publishes those events to Kafka, the write-side consumers (the
+telemetry ingress that turns `telemetry.raw` into readings and events, and the sagas),
+and their timers (the missed-care tick, the daily catalogue trigger, saga recovery and
+the readings table's partition window); `make admin` consumes them into the
+`read_analytics` schema and serves Django Admin over it. Nothing in the API process
+talks to the broker, so a slow Kafka cannot slow a request down, and nothing in the
+read side reads a write schema. See [`docs/events.md`](docs/events.md) for the topic,
+header and key contract, [`docs/telemetry.md`](docs/telemetry.md) for the raw stream
+and the readings table, [`docs/cqrs.md`](docs/cqrs.md) for the two sides, and
 [`docs/sagas.md`](docs/sagas.md) for the process managers.
+
+`make iot` is only useful once a sensor has somewhere to report to: the simulator
+prints the ids it generates, and readings from an unregistered sensor are dropped (with
+a warning) because no plant owns them yet. Register one with
+`POST /api/v1/sensors {"plant_id": "...", "sensor_id": "<the printed id>"}`, or read
+[`docs/iot-simulator.md`](docs/iot-simulator.md) for the quicker path.
 
 Local infrastructure endpoints:
 
@@ -84,6 +93,8 @@ Connection settings are documented in `.env.example`.
 - [`docs/architecture.md`](docs/architecture.md) — bounded contexts, layers, data flow
 - [`docs/domain.md`](docs/domain.md) — ubiquitous language, aggregates, invariants
 - [`docs/events.md`](docs/events.md) — event catalogue and its Kafka transport
+- [`docs/telemetry.md`](docs/telemetry.md) — the raw `telemetry.raw` stream, the readings table and its partitions
+- [`docs/iot-simulator.md`](docs/iot-simulator.md) — the simulator's physical model, scenarios and CLI
 - [`docs/cqrs.md`](docs/cqrs.md) — write schema, read schema, projections
 - [`docs/sagas.md`](docs/sagas.md) — the four process managers, their compensations and their timers
 - [`docs/adr/`](docs/adr/) — architecture decision records

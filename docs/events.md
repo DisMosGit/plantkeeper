@@ -1,12 +1,14 @@
 # Domain events
 
-> **Status:** Phase 4 — the catalogue below is exactly what `packages/domain`
+> **Status:** Phase 5 — the catalogue below is exactly what `packages/domain`
 > implements (`tests/unit/domain/test_events_catalogue.py` guards it), its
 > transport is implemented in
 > [`packages/infrastructure/.../messaging/topics.py`](../packages/infrastructure/src/plantkeeper/infrastructure/messaging/topics.py),
 > and its consumers are the read side's projections
-> ([`docs/cqrs.md`](cqrs.md)) and the write side's sagas
-> ([`docs/sagas.md`](sagas.md)). The AsyncAPI document is Phase 10.
+> ([`docs/cqrs.md`](cqrs.md)), the write side's sagas
+> ([`docs/sagas.md`](sagas.md)) and the telemetry ingress
+> ([`docs/telemetry.md`](telemetry.md)). Every event now has a producer. The
+> AsyncAPI document is Phase 10.
 
 ## Event contract
 
@@ -46,7 +48,16 @@ every consumer for no benefit at this scale.
 | `telemetry.events` | `TelemetryReceived`, `SoilMoistureLow`, `SoilMoistureHigh`, `TemperatureAnomaly`, `SensorOffline` |
 | `notifications.events` | `NotificationCreated`, `NotificationRead` |
 | `saga.events` | `SagaStarted`, `SagaCompleted`, `SagaFailed`, `SagaCompensated` |
+| `telemetry.raw` | **raw sensor JSON, not a domain event** — see below |
 | `plantkeeper.dlq.v1` | messages the relay gave up on, from any of the above |
+
+**`telemetry.raw` is the one exception to "every message on Kafka is a domain event".**
+It carries what a sensor reported — `sensor_id`, `recorded_at`, `moisture`,
+`temperature`, `light` — published directly by `tools/iot-simulator` rather than by the
+relay. A raw measurement has no `plant_id` and no business meaning until the write side's
+telemetry ingress resolves one, stores the reading and appends the `TelemetryReceived`
+that *is* a domain event to its transactional outbox. The envelope, the validation
+policy and the table are in [`docs/telemetry.md`](telemetry.md).
 
 **Body** — `json.dumps(event.model_dump(mode="json"), separators=(",", ":"))`,
 compact so the payload is the event and nothing else.
@@ -135,11 +146,19 @@ the entry was recorded.
 
 | Event | Payload | Emitted by | Consumed by |
 |-------|---------|-----------|-------------|
-| `TelemetryReceived` | `sensor_id`, `plant_id`, `recorded_at`, `moisture`, `temperature`, `light` | `Sensor` (`record`) | Care (AdaptiveWateringSaga, Phase 4); telemetry projection (Phase 5) |
+| `TelemetryReceived` | `sensor_id`, `plant_id`, `recorded_at`, `moisture`, `temperature`, `light` | the telemetry ingress (from `telemetry.raw`) | Care (`AdaptiveWateringSaga`); the readings table stores the same fact |
 | `SoilMoistureLow` | `sensor_id`, `plant_id`, `moisture`, `threshold` | `Sensor` (`record`) | Care, Notifications |
 | `SoilMoistureHigh` | `sensor_id`, `plant_id`, `moisture`, `threshold` | `Sensor` (`record`) | Care, Notifications |
 | `TemperatureAnomaly` | `sensor_id`, `plant_id`, `temperature`, `low_threshold`, `high_threshold` | `Sensor` (`record`) | Notifications, Care |
 | `SensorOffline` | `sensor_id`, `plant_id`, `last_seen_at`, `offline_for` | `Sensor` (`mark_offline`) | Notifications |
+
+`TelemetryReceived` is the one catalogued event with no aggregate behind it: a reading is
+an append-only fact, so there is nothing to raise it. The ingress appends it to the
+outbox — explicitly, in the same transaction as the reading — rather than draining it
+from an aggregate. The three threshold events are still emitted only by the `Sensor`
+aggregate's `record`, so nothing produces `SoilMoistureLow`, `SoilMoistureHigh`,
+`TemperatureAnomaly` or `SensorOffline` yet: the detector that would call `record` is
+Phase 8's notifications work.
 
 ### Notifications
 
@@ -179,7 +198,8 @@ small and every event has a real cross-context consumer:
 
 ## Deferred to later phases
 
-- Read models for telemetry, and the projections that would write them — Phase 5.
+- Windowed aggregation over the readings (a moving moisture average) and a telemetry
+  read model — Phase 8, as `docs/telemetry.md` describes.
 - AsyncAPI document — Phase 10.
 
 ## Consumers
@@ -195,3 +215,9 @@ The write side's sagas listen with one group per saga and claim their deliveries
 compensations and how to inspect and recover it are in
 [`docs/sagas.md`](sagas.md); the decisions are in
 [ADR 0005](adr/0005-orchestration-vs-choreography.md).
+
+The telemetry ingress is a consumer of a different kind: it reads `telemetry.raw`, not a
+topic from the table above, and its consumer group is
+`plantkeeper-telemetry-ingest`. It keeps no `(consumer_group, event_id)` ledger, because
+the readings table's `(sensor_id, recorded_at)` key already provides exactly that
+idempotency. [`docs/telemetry.md`](telemetry.md) has the detail.

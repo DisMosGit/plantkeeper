@@ -38,6 +38,14 @@ Versioning: [Semantic Versioning](https://semver.org/).
 - `apps/workers` now consumes: `register_consumers` attaches one group per saga to its topics before the broker starts, and the worker runs three background jobs next to the outbox relay — the missed-care tick, the daily catalogue trigger, and saga recovery.
 - `docs/sagas.md`, `docs/adr/0005-orchestration-vs-choreography.md`, a saga section in `docs/events.md`, and `.env.example` entries for the worker settings.
 - Tests: the saga registry and stop contracts (unit), the four sagas including both compensations and the grace period (integration), the schedulers and the recovery job against the real container (integration), and adding a plant → schedule + reminder + `PlantOnboarded` end to end (`tests/e2e/test_saga_flow.py`).
+- Phase 5 IoT simulator: `tools/iot-simulator` gains a physical model (diurnal light, exponential soil drying, Gaussian noise with rare outliers), the five scenarios (`normal`, `drought`, `overwatering`, `cold_snap`, `sensor_failure`), an `aiokafka` publisher that batches into `telemetry.raw`, and a CLI (`--sensors`, `--interval`, `--scenario`, `--seed`, `--sensor-base-id`, `--replay`, `--dry-run`, `--max-ticks`). `make iot` and `make iot-drought` run it, and `make iot-dry-run` prints the stream without a broker.
+- Telemetry ingress: `plantkeeper.application.telemetry.TelemetryIngestConsumer` validates a raw measurement, resolves `sensor_id → plant_id` through the sensor registry, stores the reading and appends the `TelemetryReceived` it produces to the transactional outbox in one transaction — only when the insert was the one that stored the row, so a redelivery stores and announces nothing new. `register_telemetry_ingest` subscribes it to `telemetry.raw` in `apps/workers`.
+- `write_telemetry.sensor_readings` (Alembic `0003`): RANGE-partitioned by month on `recorded_at`, primary key `(sensor_id, recorded_at)` — at once the partition-key requirement and the ingress's idempotency key — with `plant_id` denormalised and no foreign key to `sensors`.
+- `TelemetryRepository` port (`add_many` with `ON CONFLICT DO NOTHING`, `list_by_plant`), the `UnitOfWork.telemetry` property, and `plantkeeper.domain.telemetry.TelemetryReading` (the persisted fact: a reading plus the plant it belongs to).
+- `TelemetryPartitionJob` and `plantkeeper.infrastructure.persistence.partitions`: a catch-all partition created by the migration, a monthly window kept three months ahead by the worker, and a failed tick that is logged and retried rather than fatal.
+- `POST /api/v1/sensors` accepts an optional `sensor_id`, so a caller that already owns an identifier (the simulator prints its sensors' ids) can register exactly the sensor whose telemetry it will publish.
+- `docs/iot-simulator.md`, `docs/telemetry.md`, the telemetry sections of `docs/events.md` and `docs/architecture.md`, and `.env.example` entries for `TELEMETRY_*`.
+- Tests: the model, the scenarios, the publishers and the CLI loop (unit, `tests/unit/iot/`), the ingress's four decisions (unit, `tests/unit/application/test_telemetry_ingest.py`), the partition arithmetic and the worker's registration (unit), the readings table, its key, its partitions and its transactions against Postgres (integration), and the whole simulator → Kafka → table → outbox → saga path end to end (`tests/e2e/test_iot_flow.py`).
 
 ### Changed
 - Scalar value objects (`Location`, `Moisture`, `Temperature`, `LightLevel`, the care intervals) now serialise as the scalar they wrap, so event payloads are flat (`"location": "Shelf"`) instead of nested (`"location": {"value": "Shelf"}`). Validation still accepts both shapes. Identifiers already behaved this way.
@@ -50,6 +58,9 @@ Versioning: [Semantic Versioning](https://semver.org/).
 - `apps/workers` declares `python-cqrs` directly, as `apps/api` already did: the worker resolves each saga and its steps through the library's dispatcher.
 - The Kafka decoder (`decode_event`, its header/body readers) moved from `apps/admin` into `plantkeeper.infrastructure.messaging.decoding`, so the read side's projections and the write side's sagas read one contract (`apps/admin` and `apps/workers` may not import each other).
 - The `partition_key_for` field list gains `saga_id`, so a saga's four lifecycle events stay in one partition.
+- `make iot` and `make iot-drought` no longer print a placeholder: they run the simulator. `make iot-dry-run` is new.
+- `docs/events.md` no longer calls `TelemetryReceived`'s consumer "planned": every catalogued event now has a producer and a consumer.
+- `tests/integration/test_migrations.py` counts modelled tables through `pg_class` (excluding partitions) instead of `pg_tables`, so the partitioned `sensor_readings` parent is included and its monthly children are not mistaken for models.
 
 ### Deprecated
 -

@@ -534,48 +534,110 @@
 > **Цель:** реалистичный поток телеметрии в Kafka.
 > **Результат фазы:** `make iot` генерирует данные 20 сенсоров, они попадают в care-consumers.
 
+> **Статус:** ✅ выполнено — `tools/iot-simulator` считает физическую модель,
+> проигрывает 5 сценариев и публикует в `telemetry.raw`; `TelemetryIngestConsumer`
+> в `apps/workers` валидирует сырое сообщение, находит `plant_id` по реестру
+> сенсоров, пишет чтение в `write_telemetry.sensor_readings` и кладёт
+> `TelemetryReceived` в outbox — одной транзакцией. `make lint && make test` зелёные
+> (564 теста, покрытие 97%), `make migrate` применяет Alembic `0003`, `make iot` /
+> `make iot-drought` работают. Коммиты созданы локально, push в `origin` не выполнялся.
+
 ### 5.1. Физическая модель
-- [ ] `SensorState` (moisture, temperature, light, last_watered_at) · `M` 🧪
-- [ ] Диуральный цикл освещённости (синусоида от времени суток) · `M` 🧪
-- [ ] Модель высыхания почвы (экспонента, зависит от temp + light) · `M` 🧪
-- [ ] Гауссов шум + редкие выбросы · `S` 🧪
-- [ ] Коммит: `feat(iot): physical model` · `M` 🧪
+- [x] `SensorState` (moisture, temperature, light, last_watered_at) · `M` 🧪
+- [x] Диуральный цикл освещённости (синусоида от времени суток) · `M` 🧪
+- [x] Модель высыхания почвы (экспонента, зависит от temp + light) · `M` 🧪
+- [x] Гауссов шум + редкие выбросы · `S` 🧪
+- [x] Коммит: `feat(iot): physical model` · `M` 🧪
 
 ### 5.2. Сценарии
-- [ ] `normal` — базовая модель · `S`
-- [ ] `drought` — ускоренное высыхание · `S` 🧪
-- [ ] `overwatering` — moisture > 90% · `S` 🧪
-- [ ] `cold_snap` — температура падает · `S` 🧪
-- [ ] `sensor_failure` — сенсор замолкает на N минут · `S` 🧪
-- [ ] Коммит: `feat(iot): scenarios` · `M` 🧪
+- [x] `normal` — базовая модель · `S`
+- [x] `drought` — ускоренное высыхание · `S` 🧪
+- [x] `overwatering` — moisture > 90% · `S` 🧪
+- [x] `cold_snap` — температура падает · `S` 🧪
+- [x] `sensor_failure` — сенсор замолкает на N минут · `S` 🧪
+- [x] Коммит: `feat(iot): scenarios` · `M` 🧪
 
 ### 5.3. Publisher в Kafka
-- [ ] `aiokafka` producer в топик `telemetry.raw` · `M` 🧪
-- [ ] Батчинг (100 сообщений / 1 сек) · `S` 🧪
-- [ ] Graceful shutdown · `S` 🧪
-- [ ] Коммит: `feat(iot): kafka publisher` · `M` 🧪
+- [x] `aiokafka` producer в топик `telemetry.raw` · `M` 🧪
+- [x] Батчинг (100 сообщений / 1 сек) · `S` 🧪
+- [x] Graceful shutdown · `S` 🧪
+- [x] Коммит: `feat(iot): kafka publisher` · `M` 🧪
 
 ### 5.4. CLI
-- [ ] `--sensors N` (default 20) · `S`
-- [ ] `--interval SEC` (default 10) · `S`
-- [ ] `--scenario NAME` · `S`
-- [ ] `--seed INT` (детерминизм) · `S`
-- [ ] `--replay FILE.jsonl` · `M` 🧪
-- [ ] `--dry-run` (без Kafka, в stdout) · `S`
-- [ ] Коммит: `feat(iot): CLI` · `M`
+- [x] `--sensors N` (default 20) · `S`
+- [x] `--interval SEC` (default 10) · `S`
+- [x] `--scenario NAME` · `S`
+- [x] `--seed INT` (детерминизм) · `S`
+- [x] `--replay FILE.jsonl` · `M` 🧪
+- [x] `--dry-run` (без Kafka, в stdout) · `S`
+- [x] Коммит: `feat(iot): CLI` · `M`
 
 ### 5.5. Care consumer на телеметрию
-- [ ] Consumer `telemetry.raw` → валидация → publish `TelemetryReceived` · `M` 🧪
-- [ ] Дедупликация по `(sensor_id, recorded_at)` · `M` 🧪
-- [ ] Batch insert в `write_telemetry.sensor_readings` (партиционирование по времени) · `M` 🧪
-- [ ] Коммит: `feat(workers): telemetry consumer` · `L` 🧪
+- [x] Consumer `telemetry.raw` → валидация → publish `TelemetryReceived` · `M` 🧪
+- [x] Дедупликация по `(sensor_id, recorded_at)` · `M` 🧪
+- [x] Batch insert в `write_telemetry.sensor_readings` (партиционирование по времени) · `M` 🧪
+- [x] Коммит: `feat(workers): telemetry consumer` · `L` 🧪
 
 ### 5.6. E2E-тест IoT
-- [ ] Тест: симулятор → Kafka → care consumer → БД · `M` 🧪
-- [ ] Тест: сценарий `drought` → `AdaptiveWateringSaga` сдвигает расписание · `M` 🧪
-- [ ] Коммит: `test(e2e): iot telemetry flow` · `M` 🧪
+- [x] Тест: симулятор → Kafka → care consumer → БД · `M` 🧪
+- [x] Тест: сценарий `drought` → `AdaptiveWateringSaga` сдвигает расписание · `M` 🧪
+- [x] Коммит: `test(e2e): iot telemetry flow` · `M` 🧪
 
 **✅ Phase 5 завершена, когда:** `make iot` + `make iot-drought` работают, e2e-тесты зелёные.
+
+**Отклонения и уточнения:**
+- **`telemetry.raw` — не топик доменных событий.** Сырое измерение не имеет
+  `plant_id` и не является фактом ни одного контекста, поэтому симулятор публикует
+  его напрямую, а не через outbox. `TelemetryReceived` — единственное событие
+  каталога без агрегата: ingress добавляет его в outbox явно, в одной транзакции с
+  чтением, и дальше его публикует relay. `TELEMETRY_RAW` не входит в `EVENT_TOPICS`,
+  и это зафиксировано тестом.
+- **Дедупликация — ключ таблицы, а не второй ledger.** Первичный ключ
+  `(sensor_id, recorded_at)` одновременно является требованием партиционирования
+  (уникальный ключ партиционированной таблицы обязан содержать ключ партиции) и
+  ключом идемпотентности: `INSERT … ON CONFLICT DO NOTHING`. Отдельный ledger не
+  нужен и был бы вторым местом, где claim может разойтись с записью. Событие
+  `TelemetryReceived` добавляется в outbox только тогда, когда вставка действительно
+  вставила строку: повторная доставка не пишет чтение и ничего не объявляет, иначе
+  второй `TelemetryReceived` получил бы новый `event_id`, которого не узнал бы ни один
+  consumer-group ledger.
+- **`sensor_readings` действительно партиционирована по месяцам**, а не просто
+  проиндексирована: `PARTITION BY RANGE (recorded_at)`, Alembic `0003` создаёт
+  родителя, индексы и default-партицию, а `TelemetryPartitionJob` (новый джоб
+  воркера) держит окно «текущий месяц + 3». Default-партиция — страховка: чтение с
+  внеоконным `recorded_at` (replay, сбитые часы) падает туда, а не ломает запись.
+- **Сенсор без регистрации отбрасывается с предупреждением.** `--sensor-base-id`
+  (и необязательный `sensor_id` в `POST /api/v1/sensors`) добавлены сверх роадмапа
+  именно поэтому: без них детерминированные сенсоры симулятора нельзя связать с
+  растением, и критерий 5.6 «drought → сага сдвигает расписание» недостижим.
+- **Ingress не использует `WORKER_CONSUMER_TYPES`.** Он читает не доменное событие,
+  поэтому регистрируется отдельной функцией `register_telemetry_ingest`, а его
+  consumer group (`plantkeeper-telemetry-ingest`) задаётся настройкой, а не выводится
+  из имени класса. Offset reset — `latest`, не `earliest`: ledger'а для replay у
+  сырой телеметрии нет, а таблица чтений и есть её запись.
+- **Ingress коммитит по одному сообщению.** Батч — это паблишер (5.3), а не
+  консьюмер: одна транзакция на доставку и есть то, что делает чтение и его событие
+  атомарными. `add_many` при этом нарезает батч по 500 строк, если его кто-то
+  позовёт пачкой.
+- **Пороговые события (`SoilMoistureLow`, `SoilMoistureHigh`, `TemperatureAnomaly`,
+  `SensorOffline`) по-прежнему не публикуются**: их порождает `Sensor.record`, а
+  вызывающего у него пока нет — детектор появится в Phase 8 вместе с окнами и
+  уведомлениями. Ingress пишет только `TelemetryReceived`.
+- **`Sensor.last_seen_at` не обновляется на каждом чтении**: это была бы запись на
+  каждое измерение ради вопроса, который в Phase 5 никто не задаёт; последнее
+  чтение и так лежит в `sensor_readings`.
+- **Вместо теста на `apps/workers/main.py`** (как и в Phase 4) lifecycle воркера
+  проверяется через `register_telemetry_ingest` и сборку джобов; сам `main.py`
+  по-прежнему вне покрытия.
+- **`tests/integration/test_migrations.py` сравнивает модели через `pg_class`**
+  (kind `r`/`p`, без партиций), а не `pg_tables`: иначе партиционированный родитель
+  либо отсутствовал бы в ожидаемом множестве, либо его месячные дети выдавались бы
+  за отдельные модели.
+- Новых зависимостей нет: симулятор использует уже объявленный `aiokafka`, воркер —
+  существующие SQLAlchemy/Dishka/FastStream.
+- Нумерация ADR не менялась: `0006-rest-and-grpc` (Phase 7), `0007-why-python-cqrs`,
+  `0008-outbox-pattern`, `0009-event-sourcing-journal` (Phase 10). Архитектурные
+  решения Phase 5 записаны здесь и в `docs/telemetry.md`, а не отдельным ADR.
 
 ---
 
