@@ -9,7 +9,7 @@ SHELL := /bin/bash
 
 COMPOSE := docker compose
 
-.PHONY: help dev up down clean lint format test test-unit test-integration test-e2e migrate iot iot-drought
+.PHONY: help dev up down clean lint format test test-unit test-domain test-integration test-e2e migrate iot iot-drought
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -42,6 +42,9 @@ test: ## Run all tests with coverage
 
 test-unit: ## Unit tests only
 	uv run pytest tests/unit
+
+test-domain: ## Domain unit tests with the Phase 1 coverage floor (90%)
+	uv run pytest tests/unit/domain --cov=plantkeeper.domain --cov-report=term-missing --cov-fail-under=90
 
 test-integration: ## Integration tests (needs Docker)
 	uv run pytest tests/integration -m integration

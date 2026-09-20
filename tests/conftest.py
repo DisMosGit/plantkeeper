@@ -10,6 +10,8 @@ removed that override point, so redefining it would only be dead, misleading cod
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 
@@ -17,3 +19,13 @@ import pytest
 def anyio_backend() -> str:
     """Run anyio-based tests on the asyncio backend only."""
     return "asyncio"
+
+
+@pytest.fixture
+def now() -> datetime:
+    """A fixed, timezone-aware instant used as the domain clock in tests.
+
+    Domain code never reads the wall clock itself: aggregates take ``now`` as an
+    argument, so tests stay deterministic without freezing time.
+    """
+    return datetime(2026, 1, 1, 12, 0, tzinfo=UTC)

@@ -62,8 +62,30 @@ known-first-party = ["plantkeeper"]
 python_version = "3.14"
 strict = true
 warn_unreachable = true
+# Pydantic models carry the domain's data; the plugin checks their generated
+# `__init__` signatures instead of falling back to `**data: Any`.
+plugins = ["pydantic.mypy"]
+# `plantkeeper` is a namespace package assembled from every workspace member, so
+# mypy has to be told where each portion starts: without these two options it
+# resolves `plantkeeper.*` imports through the (untyped) installed packages.
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = [
+    "packages/domain/src",
+    "packages/application/src",
+    "packages/infrastructure/src",
+    "apps/api/src",
+    "apps/admin/src",
+    "apps/workers/src",
+    "tools/iot-simulator/src",
+]
 # `uv run mypy .` must not descend into the virtualenv.
 exclude = ['^\.venv/', '^build/', '^dist/']
+
+[tool.pydantic-mypy]
+init_typed = true
+init_forbid_extra = true
+warn_required_dynamic_aliases = true
 
 # -----------------------------------------------------------------------------
 # pytest

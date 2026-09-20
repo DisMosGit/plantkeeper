@@ -140,7 +140,7 @@
 > **Результат фазы:** агрегаты, VO, события, инварианты с покрытием ≥ 90%.
 
 ### 1.1. Общие Value Objects
-- [ ] `HouseholdId`, `PlantId`, `SensorId`, `SpeciesId`, `JournalEntryId` (UUID-обёртки) · `S` 🧪
+- [ ] `HouseholdId`, `PlantId`, `SensorId`, `SpeciesId`, `JournalEntryId`, `NotificationId`, `UserId` (UUID-обёртки) · `S` 🧪
 - [ ] `Location` (строка с валидацией длины 1–100) · `S` 🧪
 - [ ] `Moisture` (float 0–100, immutable) · `S` 🧪
 - [ ] `Temperature` (−50..+60 °C) · `S` 🧪
