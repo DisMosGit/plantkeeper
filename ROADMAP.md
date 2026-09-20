@@ -223,96 +223,122 @@
 
 ---
 
-## Phase 2 — Write Side (REST + Outbox) ✍️
+## Phase 2 — Write Side (REST + Outbox) ✅
 
-> **Цель:** работающий write path: HTTP-команда → агрегат → БД → событие в Kafka.
+> **Цель:** работающий write path: HTTP-команда → агрегат → БД → outbox → Kafka.
 > **Результат фазы:** `POST /api/v1/plants` создаёт растение и публикует `PlantAdded`.
 
-### 2.1. Порты (Repository, UoW, EventPublisher)
-- [ ] `PlantRepository` (Protocol): `add`, `get`, `save`, `delete` · `M`
-- [ ] `CareScheduleRepository`, `SpeciesRepository`, `SensorRepository`, `NotificationRepository` · `M`
-- [ ] `UnitOfWork` (Protocol): `commit`, `rollback`, `__aenter__`, `__aexit__` · `M`
-- [ ] `EventPublisher` (Protocol): `publish` · `S`
-- [ ] Коммит: `feat(application): repository and uow ports` · `M`
+### 2.1. Порты (Repository, UoW, Outbox, EventPublisher)
+- [x] `PlantRepository` (Protocol): `add`, `get`, `get_for_update`, `save`, `delete` · `M`
+- [x] `HouseholdRepository`, `CareScheduleRepository`, `SpeciesRepository`, `SensorRepository`, `JournalEntryRepository`, `NotificationRepository` · `M`
+- [x] `UnitOfWork` (Protocol): репозитории, `commit`, `rollback`, `__aenter__`, `__aexit__` · `M`
+- [x] `OutboxRepository` (Protocol): `append`, `fetch_unpublished`, `mark_published`, `record_failure`, `dead_letter` + `OutboxMessage` · `M`
+- [x] `IdempotencyRepository` (Protocol) и порт `Clock` · `S`
+- [x] `EventPublisher` (Protocol): `publish`, `publish_dead_letter` · `S`
+- [x] Коммит: `feat(application): repository, uow, outbox and publisher ports` · `M`
 
 ### 2.2. Persistence: SQLAlchemy 2.0 async
-- [ ] `Base` (DeclarativeBase) в `infrastructure/persistence/` · `S`
-- [ ] ORM-модель `PlantModel` (таблица `plants` в схеме `write_garden`) · `M`
-- [ ] ORM-модели для Care, Catalog, Journal, Telemetry, Notifications · `L` → разбить на 5 задач · `M` каждая
-- [ ] Маппинг ORM ↔ домен (mapper-функции) · `M` 🧪
-- [ ] `SqlAlchemyPlantRepository` (реализация порта) · `M` 🧪
-- [ ] `SqlAlchemyUnitOfWork` (session factory, commit, rollback) · `M` 🧪
-- [ ] Коммит: `feat(infra): sqlalchemy models + repositories` · `L`
+- [x] `Base` (DeclarativeBase) в `infrastructure/persistence/` с naming convention · `S`
+- [x] ORM-модель `PlantModel` (таблица `plants` в схеме `write_garden`) · `M`
+- [x] ORM-модели для Care, Catalog, Journal, Telemetry, Notifications и общей `write_shared` · `L` → разбито на 6 задач · `M` каждая
+- [x] Маппинг ORM ↔ домен (mapper-функции по контекстам + outbox) · `M` 🧪
+- [x] `SqlAlchemy*Repository` для каждого порта (10 реализаций) · `L` 🧪
+- [x] `SqlAlchemyUnitOfWork` (session factory, commit, rollback, `IntegrityError` → `ConcurrentWriteError`) · `M` 🧪
+- [x] `AggregateTracker` — какие агрегаты записали события, в порядке записи · `S` 🧪
+- [x] Коммит: `feat(infra): sqlalchemy models, mappers and repositories` · `L` 🧪
 
 ### 2.3. Alembic миграции
-- [ ] `alembic init` + конфиг с async engine · `M`
-- [ ] Миграция для `write_garden.plants` · `S`
-- [ ] Миграции для остальных таблиц write-схемы · `M`
-- [ ] `make migrate` применяет всё с нуля · `S`
-- [ ] Коммит: `feat(infra): alembic migrations for write schema` · `M`
+- [x] `alembic init` + async-конфиг (`env.py` строит URL из `Settings`) · `M`
+- [x] Миграция `0001_write_schema`: 8 схем, 9 таблиц, индексы (включая частичный по outbox) · `M` 🧪
+- [x] `make migrate` применяет всё с нуля; `upgrade` → `downgrade base` → `upgrade` проверены тестом · `S` 🧪
+- [x] `docker/postgres/init/01-schemas.sql` дополнен схемой `write_shared` · `S`
+- [x] Коммит: `feat(infra): alembic migrations for write schema` · `M` 🧪
 
 ### 2.4. Transactional Outbox
-- [ ] Таблица `outbox` (event_id, topic, payload, created_at, published_at, attempts) · `S`
-- [ ] `OutboxRepository` (append, fetch_unpublished, mark_published) · `M` 🧪
-- [ ] Интеграция Outbox в `SqlAlchemyUnitOfWork.commit()` (одна транзакция) · `M` 🧪
-- [ ] Тест: команда + событие в outbox — атомарно · `M` 🧪
-- [ ] Коммит: `feat(infra): transactional outbox` · `M` 🧪
+- [x] Таблица `write_shared.outbox` (`event_id` unique, `topic`, `partition_key`, `payload` JSONB, `occurred_at`, `created_at`, `published_at`, `dead_lettered_at`, `attempts`, `last_error`) · `S`
+- [x] Частичный индекс `ix_outbox_unpublished` по `id WHERE published_at IS NULL AND dead_lettered_at IS NULL` · `S`
+- [x] `SqlAlchemyOutboxRepository` (append, fetch_unpublished, mark_published, record_failure, dead_letter) · `M` 🧪
+- [x] Outbox в `SqlAlchemyUnitOfWork.commit()`: агрегаты и события — одна транзакция · `M` 🧪
+- [x] Тест: команда + событие в outbox — атомарно, и провал транзакции не оставляет ни агрегата, ни события · `M` 🧪
+- [x] Таблица `write_shared.idempotency_keys` + репозиторий · `S` 🧪
+- [x] Коммит: `feat(infra): transactional outbox` · `M` 🧪
 
 ### 2.5. Outbox Relay (publisher в Kafka)
-- [ ] `OutboxRelay` — фоновый цикл, читает unpublished, публикует в Kafka · `M` 🧪
-- [ ] Retry с exponential backoff (tenacity) · `S` 🧪
-- [ ] DLQ после 5 попыток · `M` 🧪
-- [ ] Интеграция Relay в FastStream worker lifecycle · `M` 🧪
-- [ ] Коммит: `feat(infra): outbox relay to kafka` · `M` 🧪
+- [x] `OutboxRelay` — фоновый цикл со своей сессией, батч, коммит на сообщение · `M` 🧪
+- [x] Retry с exponential backoff (tenacity) внутри одного опроса · `S` 🧪
+- [x] DLQ `plantkeeper.dlq.v1` после `outbox_max_attempts` (5) неудачных опросов; неудачная копия в DLQ оставляет строку на повтор · `M` 🧪
+- [x] `attempts` считает неудачные опросы, поэтому рестарт не сбрасывает счётчик · `S` 🧪
+- [x] Интеграция Relay в lifecycle воркера (`make workers`, graceful shutdown по SIGINT/SIGTERM) · `M` 🧪
+- [x] Коммит: `feat(infra): faststream kafka publisher and outbox relay` · `M` 🧪
 
 ### 2.6. Kafka producer (FastStream)
-- [ ] `KafkaBroker` singleton + конфиг из env (`KAFKA_BOOTSTRAP_SERVERS`) · `S`
-- [ ] `KafkaEventPublisher` (реализация EventPublisher) · `M` 🧪
-- [ ] Топики создаются автоматически (auto-create) · `S`
-- [ ] Коммит: `feat(infra): faststream kafka publisher` · `M`
+- [x] `KafkaBroker` singleton + конфиг из env (`KAFKA_BOOTSTRAP_SERVERS`) · `S`
+- [x] `KafkaEventPublisher` (реализация EventPublisher) · `M` 🧪
+- [x] Один топик на контекст (`garden.events`, `care.events`, …), `event_name`/`event_id` в headers, ключ из `partition_key_for` · `M` 🧪
+- [x] Топики создаются автоматически (auto-create) · `S`
+- [x] Коммит: `feat(infra): faststream kafka publisher` · `M` 🧪
 
 ### 2.7. DI (Dishka)
-- [ ] `AppProvider` (config, settings через pydantic-settings) · `M`
-- [ ] `DatabaseProvider` (engine, session_factory, UoW) · `M`
-- [ ] `MessagingProvider` (KafkaBroker, publisher) · `M`
-- [ ] `RepositoryProvider` (все репозитории) · `M`
-- [ ] Интеграция Dishka с FastAPI (`setup_dishka`, `FromDishka`) · `M` 📝
-- [ ] Коммит: `feat(infra): dishka providers` · `M`
+- [x] `AppProvider` (settings через pydantic-settings, clock, engine, session_factory, request map) · `M`
+- [x] `DatabaseProvider` (session, UoW) · `M`
+- [x] `MessagingProvider` (KafkaBroker, publisher, relay) · `M`
+- [x] `RepositoryProvider` + `build_handler_provider()` (18 хендлеров, REQUEST scope) · `M` 🧪
+- [x] Интеграция Dishka с FastAPI (`setup_dishka`, `FromDishka`, `DishkaCQRSContainer`) · `M` 📝
+- [x] Коммит: `feat(infra): dishka providers and the outbox relay worker` · `M` 🧪
 
 ### 2.8. Application слой: команды и запросы
-- [ ] `Command` / `Query` базовые классы (pydantic) · `S`
-- [ ] `CommandHandler` / `QueryHandler` базовые классы · `S`
-- [ ] `AddPlantCommand` + `AddPlantHandler` (создаёт агрегат, сохраняет, публикует) · `M` 🧪
-- [ ] `RemovePlantCommand` + handler · `S` 🧪
-- [ ] `MovePlantCommand` + handler · `S` 🧪
-- [ ] `WaterPlantCommand` + handler (проверяет инвариант) · `M` 🧪
-- [ ] `AddSensorCommand` + handler · `S` 🧪
-- [ ] `GetPlantQuery` + handler · `S` 🧪
-- [ ] `ListPlantsQuery` + handler · `S` 🧪
-- [ ] Коммит: `feat(application): garden commands and queries` · `L`
+- [x] `Command` / `Query` базовые классы (pydantic) + `IdempotentCommand` · `S`
+- [x] `CommandHandler` / `QueryHandler` базовые классы · `S`
+- [x] `CreateHouseholdCommand` + handler · `S`
+- [x] `AddPlantCommand` + handler (создаёт агрегат, блокирует household, сохраняет) · `M`
+- [x] `RemovePlantCommand`, `MovePlantCommand` + handlers · `S`
+- [x] `WaterPlantCommand`, `SkipWateringCommand` + handlers (проверяют инварианты) · `M`
+- [x] `RequestSpeciesSync`, `AddSensor`, `RemoveSensor`, `AcknowledgeNotification` + handlers · `M`
+- [x] Запросы: растения, household, care today, species (list/get), sensors, pending notifications · `M`
+- [x] `views.py` — Pydantic-проекции и `CollectionView`; `registry.py` — `RequestMap` на 18 запросов · `M`
+- [x] `idempotency.py` — `request_fingerprint` и `commit_create` (replay, конфликт, гонка) · `M`
+- [x] Коммит: `feat(application): use cases for garden, care, catalog, telemetry and notifications` · `L`
 
 ### 2.9. REST API (FastAPI) — Garden
-- [ ] `main.py` с `FastAPI()`, DI, exception handlers · `M`
-- [ ] Router `/api/v1/plants`: POST, GET, GET/{id}, PATCH, DELETE · `M` 🧪
-- [ ] Pydantic-схемы: `PlantCreate`, `PlantUpdate`, `PlantResponse` · `M`
-- [ ] Маппинг HTTP ↔ Command/Query · `M`
-- [ ] OpenAPI-документация доступна на `/docs` · `S`
-- [ ] Коммит: `feat(api): garden REST endpoints` · `L`
+- [x] `main.py` с `FastAPI()`, DI, lifespan, exception handlers (409/404/422) · `M`
+- [x] Router `/api/v1/plants`: POST, GET, GET/{id}, PATCH (move), DELETE · `M` 🧪
+- [x] Router `/api/v1/households`: POST, GET/{id} — нужен, чтобы создавать растения · `M` 🧪
+- [x] Pydantic-схемы (`PlantCreate`, `PlantUpdate`, `PlantResponse`, …) и `Idempotency-Key` · `M`
+- [x] Маппинг HTTP ↔ Command/Query через mediator · `M`
+- [x] OpenAPI-документация доступна на `/docs` · `S` 🧪
+- [x] Коммит: `feat(api): write side rest endpoints` · `L` 🧪
 
-### 2.10. REST API — Care, Catalog, Sensors
-- [ ] Router `/api/v1/care`: GET today, POST water, POST skip · `M` 🧪
-- [ ] Router `/api/v1/sensors`: POST, GET, DELETE · `M` 🧪
-- [ ] Router `/api/v1/catalog`: GET species, POST sync · `M` 🧪
-- [ ] Router `/api/v1/notifications`: GET pending, POST ack · `M` 🧪
-- [ ] Коммит: `feat(api): care, sensors, catalog, notifications endpoints` · `L`
+### 2.10. REST API — Care, Catalog, Sensors, Notifications
+- [x] Router `/api/v1/care`: GET today, POST water, POST skip · `M` 🧪
+- [x] Router `/api/v1/sensors`: POST, GET, DELETE · `M` 🧪
+- [x] Router `/api/v1/catalog`: GET species, GET/{id}, POST sync (202 + `SpeciesSyncRequested` в outbox) · `M` 🧪
+- [x] Router `/api/v1/notifications`: GET pending, POST ack · `M` 🧪
+- [x] Коммит: `feat(api): write side rest endpoints` (роутеры вышли одним коммитом с 2.9: `build_api_router` импортирует их все) · `L` 🧪
 
 ### 2.11. E2E-тест write side
-- [ ] Тест: `POST /plants` → 201, растение в БД, событие в outbox · `M` 🧪
-- [ ] Тест: `POST /plants` → outbox relay → событие в Kafka (testcontainers) · `M` 🧪
-- [ ] Тест: повторный `POST /plants` с тем же idempotency key — не дублирует · `M` 🧪
-- [ ] Коммит: `test(e2e): write side flow` · `M` 🧪
+- [x] Тест: `POST /plants` → 201, растение в БД, событие в outbox · `M` 🧪
+- [x] Тест: `POST /plants` → outbox relay → событие в Kafka (testcontainers) · `M` 🧪
+- [x] Тест: повторный `POST /plants` с тем же idempotency key не дублирует; другой body с тем же ключом — 409 · `M` 🧪
+- [x] Тесты: инварианты через HTTP (404/422/409), OpenAPI, sensors, catalog sync · `M` 🧪
+- [x] Коммит: `test(e2e): write side flow` · `M` 🧪
+
+### 2.12. Документация фазы
+- [x] ADR `0003-write-side-outbox.md` — почему outbox свой, а не из `python-cqrs` · `M` 📝
+- [x] `docs/events.md` — раздел Transport: топики, body, headers, ключ, at-least-once, DLQ · `M` 📝
+- [x] `CHANGELOG.md` — записи фазы · `S` 📝
+- [x] Коммит: `docs: outbox adr, event transport and changelog` · `M` 📝
 
 **✅ Phase 2 завершена, когда:** `POST /api/v1/plants` работает end-to-end, событие в Kafka, e2e-тест зелёный.
+
+**Статус:** ✅ завершена 2026-09-20. `make lint` чист, `make test` — 319 тестов (unit + integration + e2e на testcontainers).
+
+**Отклонения и уточнения:**
+- `RepositoryProvider` отдаёт порты репозиториев только для чтения: write-хендлеры берут репозитории из `UnitOfWork`, чтобы сессия и транзакция были одними и теми же. Сами порты от этого не изменились.
+- Отдельных unit-тестов на команды и запросы нет: путь покрыт интеграционными (`test_repositories.py` — репозитории, UoW, outbox, идемпотентность) и e2e-тестами (HTTP → outbox → Kafka), а `tests/unit/infrastructure/` — топиками, relay, мапперами и DI.
+- Задачи, которых не было в исходном плане: зависимости (`asyncpg`, `faststream[kafka]`, `pydantic-settings`, `tenacity`, `alembic`), `POST /api/v1/households`, таблица `write_shared.idempotency_keys`, `make api` / `make workers`, ADR 0003.
+- `POST /api/v1/catalog/sync` кладёт `SpeciesSyncRequested` в outbox напрямую; сага, которая его обработает, — Phase 4.
+- Значения value objects (`Location`, `Moisture`, …) уходят в JSON как скаляры (`"location": "Shelf"`), а не как `{"value": "Shelf"}`: контракт события не должен выдавать устройство домена (`fix(domain): serialise scalar value objects as their scalar`).
+- ADR последующих фаз переномерованы на +1: `0004-orchestration-vs-choreography` (Phase 4), `0005-rest-and-grpc` (Phase 8), `0006-why-python-cqrs`, `0007-outbox-pattern`, `0008-event-sourcing-journal` (Phase 10).
 
 ---
 
@@ -408,7 +434,7 @@
 
 ### 4.6. Документация саг
 - [ ] `docs/sagas.md` — описание 4 саг с диаграммами (Mermaid sequence) · `L` 📝
-- [ ] ADR `0003-orchestration-vs-choreography.md` · `M` 📝
+- [ ] ADR `0004-orchestration-vs-choreography.md` · `M` 📝
 - [ ] Коммит: `docs: sagas description` · `M` 📝
 
 **✅ Phase 4 завершена, когда:** 4 саги покрыты тестами, `docs/sagas.md` заполнен.
@@ -527,7 +553,7 @@
 
 ### 7.4. Документация
 - [ ] `docs/grpc.md` — как запустить, как вызвать через grpcurl · `M` 📝
-- [ ] ADR `0004-rest-and-grpc.md` — почему оба протокола · `M` 📝
+- [ ] ADR `0005-rest-and-grpc.md` — почему оба протокола · `M` 📝
 - [ ] Коммит: `docs: grpc` · `M` 📝
 
 **✅ Phase 7 завершена, когда:** `grpcurl` из README работает, e2e-тест зелёный.
@@ -613,9 +639,9 @@
 ### 10.2. Документация
 - [ ] `docs/architecture.md` — полный BC map + sequence diagrams · `L` 📝
 - [ ] `docs/patterns.md` — таблица паттернов с ссылками на код · `M` 📝
-- [ ] ADR `0005-why-python-cqrs.md` · `M` 📝
-- [ ] ADR `0006-outbox-pattern.md` · `M` 📝
-- [ ] ADR `0007-event-sourcing-journal.md` · `M` 📝
+- [ ] ADR `0006-why-python-cqrs.md` · `M` 📝
+- [ ] ADR `0007-outbox-pattern.md` · `M` 📝
+- [ ] ADR `0008-event-sourcing-journal.md` · `M` 📝
 - [ ] Обновить `README.md` финальной диаграммой · `M` 📝
 - [ ] Коммит: `docs: architecture, patterns, ADRs` · `L` 📝
 
