@@ -333,9 +333,10 @@ async def test_a_watering_inside_the_grace_period_satisfies_the_window(
     assert window.state is MissedCareState.SATISFIED
 
 
-async def test_an_expired_window_shifts_the_schedule_and_notifies(
+async def test_an_expired_window_shifts_the_schedule(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """The saga owns the schedule; the household is told by ``NotificationConsumer``."""
     due_at = NOW
     _, plant_id = await seed_plant_with_schedule(session_factory, next_watering_at=due_at)
     clock = FakeClock(NOW)
@@ -366,7 +367,7 @@ async def test_an_expired_window_shifts_the_schedule_and_notifies(
     assert window.state is MissedCareState.MISSED
     names = await outbox_event_names(session_factory)
     assert names.count("CareMissed") == 1
-    assert await notification_count(session_factory, NotificationType.CARE_MISSED.value) == 1
+    assert await notification_count(session_factory, NotificationType.CARE_MISSED.value) == 0
 
 
 async def test_a_watering_after_the_deadline_does_not_erase_the_miss(

@@ -40,6 +40,8 @@ from plantkeeper.application.commands.journal import AddJournalEntryHandler
 from plantkeeper.application.commands.notifications import AcknowledgeNotificationHandler
 from plantkeeper.application.commands.telemetry import AddSensorHandler, RemoveSensorHandler
 from plantkeeper.application.journal.consumer import JournalEntryConsumer
+from plantkeeper.application.notifications.consumer import NotificationConsumer
+from plantkeeper.application.notifications.pusher import NotificationPusher
 from plantkeeper.application.ports.catalog import SpeciesCache, SpeciesCatalog, SpeciesSource
 from plantkeeper.application.ports.clock import Clock
 from plantkeeper.application.ports.event_publisher import EventPublisher
@@ -369,6 +371,8 @@ SAGA_COMPONENT_TYPES = (
     AdaptiveWateringSaga,
     MissedCareSaga,
     JournalEntryConsumer,
+    NotificationConsumer,
+    NotificationPusher,
     # Ingress
     TelemetryIngestConsumer,
     # Triggers

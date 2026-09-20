@@ -6,6 +6,9 @@ other half of that split:
 * the **relay** publishes the outbox;
 * the **saga consumers** subscribe to the topics the relay fills and run the four
   sagas (``docs/sagas.md``);
+* the **notification consumers** turn care and telemetry facts into reminders
+  (``NotificationConsumer``) and wake the households a long poll is waiting for
+  (``NotificationPusher``) — see ``docs/notifications.md``;
 * the **telemetry ingress** consumes ``telemetry.raw``, which is not a domain-event
   topic: it stores each reading and appends the ``TelemetryReceived`` the sagas
   then react to (``docs/telemetry.md``);

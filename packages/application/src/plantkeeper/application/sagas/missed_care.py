@@ -12,8 +12,9 @@ a fact with no deadline of its own, so the consumer opens a *window* — a row i
 * :meth:`MissedCareSaga.escalate_overdue` — the scheduled half. In one
   transaction it marks newly due schedules (``WateringDue``) so a window exists
   for them, and escalates every expired pending window: the schedule moves to the
-  next interval (``CareMissed``), the household gets a ``care_missed``
-  notification, and the window becomes ``missed``.
+  next interval (``CareMissed``) and the window becomes ``missed``. The household
+  is told by ``NotificationConsumer``, which reacts to the recorded
+  ``CareMissed``; this saga owns the schedule, not what the household sees.
 
 Splitting the timer from the reactions is what makes the saga testable without a
 clock library: the scheduler is called directly with a ``now`` the test controls.
@@ -26,7 +27,6 @@ from datetime import datetime, timedelta
 from typing import ClassVar
 
 from cqrs.dispatcher.saga import SagaDispatcher
-from pydantic import JsonValue
 
 from plantkeeper.application.ports.clock import Clock
 from plantkeeper.application.ports.sagas import MissedCareState, MissedCareWindow
@@ -34,8 +34,6 @@ from plantkeeper.application.ports.unit_of_work import UnitOfWork
 from plantkeeper.application.sagas.consumer import Consumer
 from plantkeeper.domain.base import DomainEvent
 from plantkeeper.domain.care.events import WateringCompleted, WateringDue
-from plantkeeper.domain.notifications.notification import Notification
-from plantkeeper.domain.notifications.values import NotificationType
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +137,13 @@ class MissedCareSaga(Consumer):
             )
 
     async def _escalate_expired(self, *, now: datetime) -> int:
-        """Shift the schedule, notify the household and close each expired window."""
+        """Shift the schedule and close each expired window.
+
+        The household is told by ``NotificationConsumer``, which turns the
+        ``CareMissed`` recorded here into a ``care_missed`` notification: this
+        saga owns the schedule and the grace window, and the Notifications
+        context owns what the household sees.
+        """
         expired = await self.unit_of_work.missed_care_windows.list_overdue(
             now, limit=TICK_BATCH_SIZE
         )
@@ -149,18 +153,6 @@ class MissedCareSaga(Consumer):
                 continue
             schedule.mark_missed(now=now, expected_version=schedule.version)
             await self.unit_of_work.care_schedules.save(schedule)
-            payload: dict[str, JsonValue] = {
-                "plant_id": str(window.plant_id),
-                "next_watering_at": schedule.next_watering_at.isoformat(),
-            }
-            await self.unit_of_work.notifications.add(
-                Notification.create(
-                    household_id=window.household_id,
-                    notification_type=NotificationType.CARE_MISSED,
-                    now=now,
-                    payload=payload,
-                )
-            )
             await self.unit_of_work.missed_care_windows.save(
                 window.model_copy(update={"state": MissedCareState.MISSED, "updated_at": now})
             )

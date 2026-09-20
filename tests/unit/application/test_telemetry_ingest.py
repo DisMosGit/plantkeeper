@@ -21,7 +21,12 @@ from plantkeeper.application.ports.unit_of_work import UnitOfWork
 from plantkeeper.application.telemetry.ingest import TelemetryIngestConsumer, parse_raw_reading
 from plantkeeper.domain.base import DomainEvent
 from plantkeeper.domain.identifiers import PlantId, SensorId
-from plantkeeper.domain.telemetry.events import TelemetryReceived
+from plantkeeper.domain.telemetry.events import (
+    SoilMoistureHigh,
+    SoilMoistureLow,
+    TelemetryReceived,
+    TemperatureAnomaly,
+)
 from plantkeeper.domain.telemetry.reading import TelemetryReading
 from plantkeeper.domain.telemetry.sensor import Sensor
 
@@ -303,6 +308,35 @@ async def test_a_reading_for_another_sensor_does_not_exist_for_this_one() -> Non
 
     assert stored is False
     assert uow.telemetry.readings == []
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        (a_raw_payload(moisture=12.0), SoilMoistureLow),
+        (a_raw_payload(moisture=95.0), SoilMoistureHigh),
+        (a_raw_payload(temperature=41.0), TemperatureAnomaly),
+        (a_raw_payload(temperature=-20.0), TemperatureAnomaly),
+    ],
+    ids=["dry", "overwatered", "too-hot", "too-cold"],
+)
+async def test_a_crossing_reading_also_announces_its_threshold_event(
+    payload: bytes, expected: type[DomainEvent]
+) -> None:
+    """The sensor aggregate decides what a measurement means, not the ingress.
+
+    ``Sensor.record`` raises ``TelemetryReceived`` plus one threshold event per
+    crossing, and the ingress appends each of them to the outbox in the same
+    transaction as the reading — this is what gives ``SoilMoistureLow``,
+    ``SoilMoistureHigh`` and ``TemperatureAnomaly`` their first real producer.
+    """
+    uow = FakeUnitOfWork(sensor=a_registered_sensor())
+
+    stored = await a_consumer(uow).ingest(payload)
+
+    assert stored is True
+    assert [type(event) for event in uow.outbox.events] == [TelemetryReceived, expected]
+    assert uow.commits == 1
 
 
 async def test_a_redelivery_stores_nothing_new_and_announces_nothing_new() -> None:

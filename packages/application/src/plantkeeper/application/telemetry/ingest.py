@@ -16,10 +16,19 @@ four things in order, and stops at the first one that says it cannot:
    simulator run is absorbed by the database rather than by a check here; a
    delivery whose row is already there announces nothing either, because its
    event travelled in the transaction that stored it;
-#. **append** the ``TelemetryReceived`` the new reading produces to the outbox,
-   in the same transaction as the reading. The outbox relay publishes it, which
-   is what keeps the saga's input on the same at-least-once, one-writer path as
-   every other domain event.
+#. **append** the events the new reading produces to the outbox, in the same
+   transaction as the reading. The domain's own :meth:`Sensor.record` decides what
+   a measurement means — :class:`TelemetryReceived` always, and the threshold
+   event when the reading crosses one — and the ingress appends every event the
+   aggregate raised. The outbox relay publishes them, which is what keeps the
+   sagas' input on the same at-least-once, one-writer path as every other domain
+   event.
+
+The sensor row itself is deliberately not written: ``record`` updates the
+aggregate's ``last_seen_at`` in memory, and Phase 5 decided that a reading is not
+worth an ``UPDATE`` on the sensor (the readings table already answers "when did
+this sensor last report"). What the aggregate is called for here is its
+*decisions*, not its state.
 
 The transactional ordering matters in both directions: a crash before the commit
 loses nothing (Kafka redelivers), and a crash after it re-inserts nothing (the
@@ -38,9 +47,8 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, ValidationError
 from plantkeeper.application.ports.clock import Clock
 from plantkeeper.application.ports.unit_of_work import UnitOfWork
 from plantkeeper.domain.identifiers import PlantId, SensorId
-from plantkeeper.domain.telemetry.events import TelemetryReceived
 from plantkeeper.domain.telemetry.reading import TelemetryReading
-from plantkeeper.domain.values import LightLevel, Moisture, Temperature
+from plantkeeper.domain.values import LightLevel, Moisture, SensorReading, Temperature
 
 logger = logging.getLogger(__name__)
 
@@ -148,17 +156,21 @@ class TelemetryIngestConsumer:
         async with self._unit_of_work:
             inserted = await self._unit_of_work.telemetry.add_many([stored])
             if inserted:
-                await self._unit_of_work.outbox.append(
-                    TelemetryReceived(
+                # The aggregate decides what the measurement means: always
+                # ``TelemetryReceived``, plus the threshold event it crossed. The
+                # events are drained and appended explicitly because the sensor row
+                # is not being saved, so nothing would collect them otherwise.
+                sensor.record(
+                    SensorReading(
                         sensor_id=stored.sensor_id,
-                        plant_id=stored.plant_id,
                         recorded_at=stored.recorded_at,
                         moisture=stored.moisture,
                         temperature=stored.temperature,
                         light=stored.light,
-                        occurred_at=stored.recorded_at,
                     )
                 )
+                for event in sensor.collect_events():
+                    await self._unit_of_work.outbox.append(event)
                 await self._unit_of_work.commit()
 
         if not inserted:
