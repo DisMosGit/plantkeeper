@@ -646,32 +646,107 @@
 > **Цель:** append-only Event Store для журнала ухода.
 > **Результат фазы:** можно «отмотать» состояние журнала на любую дату.
 
+> **Статус:** ✅ выполнено — `write_journal.event_store` (Alembic `0004`) хранит по
+> растению свой стрим с оптимистичной блокировкой по `(stream_id, version)`,
+> `JournalAggregate` восстанавливается из стрима, снапшоты (`0005`) пишутся каждые 50
+> событий, `GET /api/v1/journal/{plant_id}` и `.../at?date=` отвечают реплеем, а
+> `JournalEntryConsumer` превращает `WateringCompleted` в запись журнала. `make lint`
+> чист, `make test` — 623 теста (unit + integration + e2e на testcontainers),
+> покрытие 97%. Коммиты созданы локально, push в `origin` не выполнялся.
+
 ### 6.1. Event Store
-- [ ] Таблица `event_store` (stream_id, version, event_type, payload, occurred_at) · `M`
-- [ ] `EventStoreRepository` (append, load_stream, load_all) · `M` 🧪
-- [ ] Optimistic concurrency по `(stream_id, version)` · `M` 🧪
-- [ ] Коммит: `feat(infra): event store` · `M` 🧪
+- [x] Таблица `event_store` (stream_id, version, event_type, payload, occurred_at) · `M`
+- [x] `EventStoreRepository` (append, load_stream, load_all) · `M` 🧪
+- [x] Optimistic concurrency по `(stream_id, version)` · `M` 🧪
+- [x] Коммит: `feat(infra): event store` · `M` 🧪
 
 ### 6.2. Journal aggregate + handlers
-- [ ] `JournalAggregate` — восстанавливается из стрима · `M` 🧪
-- [ ] Команда `AddJournalEntry` + handler (append в стрим) · `M` 🧪
-- [ ] Запрос `GetJournalAtDate` — восстановить состояние на дату · `M` 🧪
-- [ ] Запрос `GetJournalTimeline` — все записи · `S` 🧪
-- [ ] Коммит: `feat(application): journal event sourcing` · `M` 🧪
+- [x] `JournalAggregate` — восстанавливается из стрима · `M` 🧪
+- [x] Команда `AddJournalEntry` + handler (append в стрим) · `M` 🧪
+- [x] Запрос `GetJournalAtDate` — восстановить состояние на дату · `M` 🧪
+- [x] Запрос `GetJournalTimeline` — все записи · `S` 🧪
+- [x] Коммит: `feat(application): journal event sourcing` · `M` 🧪
 
 ### 6.3. Snapshots
-- [ ] Таблица `journal_snapshots` (stream_id, version, state) · `M`
-- [ ] Автоматический snapshot каждые N событий · `M` 🧪
-- [ ] `load_stream` использует snapshot если есть · `M` 🧪
-- [ ] Коммит: `feat(infra): journal snapshots` · `M` 🧪
+- [x] Таблица `journal_snapshots` (stream_id, version, state) · `M`
+- [x] Автоматический snapshot каждые N событий · `M` 🧪
+- [x] `load_stream` использует snapshot если есть · `M` 🧪
+- [x] Коммит: `feat(infra): journal snapshots` · `M` 🧪
 
 ### 6.4. REST + Admin для журнала
-- [ ] `GET /api/v1/journal/{plant_id}` · `M` 🧪
-- [ ] `GET /api/v1/journal/{plant_id}/at?date=...` · `M` 🧪
-- [ ] Django Admin: timeline журнала на странице растения · `M`
-- [ ] Коммит: `feat(api+admin): journal endpoints` · `M`
+- [x] `GET /api/v1/journal/{plant_id}` · `M` 🧪
+- [x] `GET /api/v1/journal/{plant_id}/at?date=...` · `M` 🧪
+- [x] Django Admin: timeline журнала на странице растения · `M`
+- [x] Коммит: `feat(api+admin): journal endpoints` · `M`
 
 **✅ Phase 6 завершена, когда:** журнал append-only, можно получить состояние на любую дату.
+
+**Отклонения и уточнения:**
+- **Продюсер `JournalEntryAdded` добавлен сверх роадмапа.** Ни 6.1–6.4, ни коммиты
+  фазы его не называют, но `docs/events.md` с Phase 3 назначает Journal
+  потребителем `WateringCompleted`, а `docs/cqrs.md` — «до Phase 6 никто не
+  публикует `JournalEntryAdded`». Без консьюмера критерий фазы («журнал
+  append-only, можно получить состояние на любую дату») недостижим на работающей
+  системе: журнал было бы нечем наполнить. `JournalEntryConsumer` живёт в
+  `packages/application` и регистрируется в `CONSUMER_TYPES` рядом с
+  choreography-сагами; `apps/workers/consumers.py` не изменился — он выводит
+  группы и топики из реестра.
+- **`/at?date=` фильтрует по моменту ухода (`entry_occurred_at`), а не по моменту
+  записи.** Журнал — это лог ухода, и вопрос «что было сделано к этой дате»
+  задаётся датой ухода; так же журнал упорядочен (`JournalStream`) и так же его
+  показывает админка. Дата включительная и означает конец суток UTC (`time.max`).
+  Момент записи остаётся полем события и не является осью запроса: запись,
+  добавленная задним числом, всё равно попадает в свой день.
+- **Идемпотентность консьюмера двойная.** Кроме ledger'а
+  `(consumer_group, event_id)`, `entry_id` выводится из события
+  (`watering_entry_id` = `uuid5`), и `record_journal_entry` для уже
+  записанного `entry_id` — no-op. Append-only история не переживает дубликат,
+  который один ledger пропустил бы при пересоздании группы (сброшенный offset +
+  потерянный ledger).
+- **`write_journal.journal_entries` остаётся и пишется в той же транзакции.**
+  Event store — источник истины, таблица Phase 2 — синхронное табличное отражение
+  тех же фактов: писатель ровно один (код append'а), разойтись они не могут,
+  деструктивной миграции не нужно. Ни один read-путь её не читает; удалить её —
+  отдельное решение более поздней фазы.
+- **`load_stream` и снапшот.** Порт `EventStoreRepository.load_stream` читает
+  события стрима после заданной версии, а «использовать снапшот, если он есть»
+  (6.3) реализовано в `application/journal/store.py::load_journal_aggregate`:
+  версию для чтения хвоста даёт `JournalSnapshotRepository.latest`. Так слой
+  доступа к данным не знает, что такое агрегат, а политика реплея остаётся в
+  application.
+- **Интервал снапшотов — модульная константа** (`SNAPSHOT_EVERY = 50`), как
+  `GRACE_PERIOD` и `TICK_BATCH_SIZE`, а не настройка: это политика журнала, а не
+  свойство окружения. `Settings` не менялся.
+- **Снапшот append-only агрегата не сжимает состояние, а ограничивает реплей.**
+  Состояние журнала — это его записи, поэтому снапшот хранит их список; выигрыш в
+  том, сколько строк событий десериализует реплей. Хранение и pruning истории
+  снапшотов — вне области фазы (зафиксировано в `docs/event-sourcing.md`).
+- **Версия и целостность.** Реплей проверяет непрерывность версий, известность
+  `event_type` и то, что в стриме лежит именно журнальное событие; нарушение —
+  `EventStoreCorruptionError` (500), а не «пропустить с предупреждением», в
+  отличие от политики декодера Kafka: локальный стрим обязан реплеиться целиком.
+  Проигранная гонка за версию — `EventStoreConcurrencyError`
+  (наследник `ConcurrentWriteError`); API теперь отображает `ConcurrentWriteError`
+  в 409, а не в 500.
+- **Разрыв цикла импортов.** `application/sagas/__init__.py` больше не
+  реэкспортирует реестр: реестр импортирует всех консьюмеров, а консьюмер журнала
+  импортирует пакет за базовым классом, поэтому реэкспорт замыкал цикл. Реестр
+  импортируется по своему имени модуля (`plantkeeper.application.sagas.registry`),
+  и его никто не импортировал из корня пакета.
+- **Manual-entry endpoint не добавлен.** `AddJournalEntryCommand` реализован и
+  покрыт тестами (им пользуется консьюмер), но `POST /api/v1/journal/{plant_id}` в
+  роадмапе нет; записи `FERTILIZING`, `REPOTTING`, `NOTE` пока не имеют продюсера
+  в Care, и это зафиксировано в `docs/event-sourcing.md`.
+- **Строки `JournalEntryAdded` для skip/missed не пишутся.** `CareSkipped`,
+  `CareMissed` и `WateringRescheduled` — про то, что ничего не сделали или что
+  план сдвинулся; журнал фиксирует, что случилось.
+- **`load_all` пока без вызывающего в проде.** Реализован и покрыт интеграционным
+  тестом как точка входа для будущего replay/rebuild-инструмента.
+- ADR не добавлялся: `0009-event-sourcing-journal.md` зарезервирован за Phase 10,
+  решения фазы записаны в `docs/event-sourcing.md` и здесь (как в Phase 5). Новых
+  зависимостей нет: только существующие SQLAlchemy, Dishka, Pydantic.
+- Нумерация ADR не менялась: `0006-rest-and-grpc` (Phase 7), `0007-why-python-cqrs`,
+  `0008-outbox-pattern`, `0009-event-sourcing-journal` (Phase 10).
 
 ---
 

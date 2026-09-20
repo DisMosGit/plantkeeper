@@ -1,8 +1,8 @@
 # Architecture
 
-> **Status:** Phases 0–5 are implemented: the write path with its transactional
-> outbox, the CQRS read side, the four sagas and the IoT simulator with its
-> telemetry ingress. Later phases add Event Sourcing for the Journal (6), gRPC (7),
+> **Status:** Phases 0–6 are implemented: the write path with its transactional
+> outbox, the CQRS read side, the four sagas, the IoT simulator with its telemetry
+> ingress, and the Journal as an event-sourced aggregate. Later phases add gRPC (7),
 > long-polling notifications (8), the Trefle ACL (9) and the assembled contracts
 > (10) — see [`ROADMAP.md`](../ROADMAP.md).
 

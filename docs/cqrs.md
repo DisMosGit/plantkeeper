@@ -166,8 +166,12 @@ decisions rather than oversights:
 - `TelemetryReceived`, `SoilMoistureLow`, `SoilMoistureHigh`, `TemperatureAnomaly`,
   `SensorOffline` — telemetry projections land in Phase 5.
 
-Two read models are built and tested before their producers exist:
-`journal_entries` (nothing publishes `JournalEntryAdded` before Phase 6) and
-`species`/`plants.species_name` (nothing publishes `SpeciesUpdated` before the
-Trefle synchronisation in Phase 9). Their projections are exercised directly in
+One read model is built and tested before its producer exists:
+`species`/`plants.species_name` (nothing publishes `SpeciesUpdated` before the Trefle
+synchronisation in Phase 9). Its projection is exercised directly in
 `tests/integration/test_projections.py`.
+
+`journal_entries` used to be in that list: since Phase 6 the write side's
+`JournalEntryConsumer` produces `JournalEntryAdded` from a completed watering, and the
+journal itself is event-sourced (`docs/event-sourcing.md`) — the read model is the
+admin's view of a stream the write side keeps as its source of truth.

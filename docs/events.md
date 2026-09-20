@@ -86,9 +86,9 @@ and dispatches on the `event_name` header — a topic carries every event of its
 context, so most deliveries are somebody else's. The read side runs one group per
 projection (`<READ_SIDE_CONSUMER_GROUP_PREFIX>-garden`, `…-care`, `…-catalog`,
 `…-notifications`, `…-journal`) with `auto_offset_reset="earliest"`, which is what
-makes a rebuilt read table possible. The write side runs one group per saga
+makes a rebuilt read table possible. The write side runs one group per consumer
 (`<WORKER_CONSUMER_GROUP_PREFIX>-onboard-plant`, `…-adaptive-watering`,
-`…-missed-care`, `…-species-sync`). A consumer that meets an unknown
+`…-missed-care`, `…-species-sync`, `…-journal-entries`). A consumer that meets an unknown
 `event_name`, or a body that does not validate, logs it with the `event_id` and
 acknowledges it rather than blocking the partition behind a contract violation.
 
@@ -120,7 +120,7 @@ write side's ([`docs/sagas.md`](sagas.md)).
 |-------|---------|-----------|-------------|
 | `CareScheduleCreated` | `plant_id`, `watering_interval`, `next_watering_at` | `CareSchedule` (`create`) | `CareProjection` |
 | `WateringDue` | `plant_id`, `due_at` | `CareSchedule` (`mark_due`), `MissedCareSaga`'s scheduler | `MissedCareSaga`; Notifications (Phase 8) |
-| `WateringCompleted` | `plant_id`, `completed_at`, `next_watering_at` | `CareSchedule` (`complete_watering`) | `CareProjection`; `MissedCareSaga`; Journal (Phase 6) |
+| `WateringCompleted` | `plant_id`, `completed_at`, `next_watering_at` | `CareSchedule` (`complete_watering`) | `CareProjection`; `MissedCareSaga`; `JournalEntryConsumer` |
 | `WateringRescheduled` | `plant_id`, `previous_next_watering_at`, `next_watering_at`, `reason` | `CareSchedule` (`reschedule`), `AdaptiveWateringSaga` | `CareProjection`; Notifications (Phase 8) |
 | `CareMissed` | `plant_id`, `next_watering_at` | `CareSchedule` (`mark_missed`), `MissedCareSaga` | `CareProjection`; Notifications (Phase 8) |
 | `CareSkipped` | `plant_id`, `skipped_at`, `next_watering_at` | `CareSchedule` (`skip`) | `CareProjection` |
@@ -141,6 +141,12 @@ write side's ([`docs/sagas.md`](sagas.md)).
 
 `entry_occurred_at` is when the care happened; the inherited `occurred_at` is when
 the entry was recorded.
+
+`JournalEntryAdded` is the fact of an **event-sourced** aggregate: the journal stores
+it in `write_journal.event_store` and derives its state by replaying the stream
+(`docs/event-sourcing.md`). `JournalEntryConsumer` is what produces one for a
+watering: it consumes `WateringCompleted` and appends a `WATERING` entry whose care
+moment is the event's `completed_at`.
 
 ### Telemetry
 

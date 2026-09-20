@@ -33,7 +33,7 @@ the layer direction and the independence of the bounded contexts (`make lint`).
 | Garden | `Plant`, `Household` | Name is not blank; no two waterings within an hour; no repotting more often than every 182 days; at most 50 plants per household | `write_garden` |
 | Care | `CareSchedule` | Interval > 0; next watering ≥ now; `version` increments on every change | `write_care` |
 | Catalog | `Species` | Scientific and common names are not blank; `version` increments on every change | `write_catalog` + Valkey |
-| Journal | `JournalEntry`, `JournalStream` | Append-only and immutable; one stream per plant; no duplicate entry | `write_journal` |
+| Journal | `JournalEntry`, `JournalStream`, `JournalAggregate` | Append-only and immutable; one stream per plant; no duplicate entry; a stream replays to the same state every time | `write_journal` (event store + snapshots) |
 | Telemetry | `Sensor` | A reading must come from its own sensor; a sensor belongs to exactly one plant; offline only after 10 silent minutes | `write_telemetry` |
 | Notifications | `Notification` | Acknowledged at most once; `read_at` is set by an explicit ack | `write_notifications` |
 | Identity | `User` | Display name is not blank; a user belongs to exactly one household | `write_identity` |
@@ -122,6 +122,14 @@ classDiagram
     +JournalEntryType entry_type
     +datetime occurred_at
   }
+  class JournalAggregate {
+    +PlantId id
+    +int version
+    +add_entry(...)
+    +apply(JournalEntryAdded)
+    +state()
+    +state_at(moment)
+  }
   class Notification {
     +NotificationId id
     +HouseholdId household_id
@@ -144,10 +152,17 @@ classDiagram
   Plant "1" --> "1" CareSchedule : schedules
   Plant "1" --> "0..*" Sensor : is watched by
   Plant "1" --> "0..*" JournalEntry : logs
+  JournalAggregate "1" --> "0..*" JournalEntry : replays
   Household "1" --> "0..*" User : has members
   Household "1" --> "0..*" Notification : receives
   Species "1" --> "0..*" Plant : is the species of
 ```
+
+The Journal is the one event-sourced context: `JournalEntry` is a fact, and
+`JournalAggregate` is the whole stream of one plant replayed into state. Its history is
+the source of truth, so it can be replayed to any past date
+([`docs/event-sourcing.md`](event-sourcing.md)); the other contexts store what is true
+now.
 
 ## Invariants and thresholds
 
@@ -161,6 +176,8 @@ classDiagram
 | A silent sensor is offline after 10 minutes | `OFFLINE_AFTER = 10 minutes` | `telemetry/sensor.py` |
 | Next watering is never scheduled in the past | — | `care/schedule.py` |
 | Optimistic locking on every schedule/species change | — | `care/schedule.py`, `catalog/species.py` |
+| A journal entry is written once: no mutators, no duplicate in a stream | — | `journal/entry.py`, `journal/stream.py` |
+| A replayed stream has no version gap | — | `application/journal/store.py` |
 
 Boundary values are inclusive: moisture exactly 30 or 80, temperature exactly 10 or
 35, a watering exactly one hour after the previous one, and a repot exactly 182 days

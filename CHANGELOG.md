@@ -46,6 +46,14 @@ Versioning: [Semantic Versioning](https://semver.org/).
 - `POST /api/v1/sensors` accepts an optional `sensor_id`, so a caller that already owns an identifier (the simulator prints its sensors' ids) can register exactly the sensor whose telemetry it will publish.
 - `docs/iot-simulator.md`, `docs/telemetry.md`, the telemetry sections of `docs/events.md` and `docs/architecture.md`, and `.env.example` entries for `TELEMETRY_*`.
 - Tests: the model, the scenarios, the publishers and the CLI loop (unit, `tests/unit/iot/`), the ingress's four decisions (unit, `tests/unit/application/test_telemetry_ingest.py`), the partition arithmetic and the worker's registration (unit), the readings table, its key, its partitions and its transactions against Postgres (integration), and the whole simulator → Kafka → table → outbox → saga path end to end (`tests/e2e/test_iot_flow.py`).
+- Phase 6 event sourcing: `JournalAggregate` replays one plant's stream into state (`add_entry`, `apply`, `state`, `state_at`, the snapshot policy), and `JournalStream`/`JournalEntry` gain a lookup by identifier.
+- `write_journal.event_store` (Alembic `0004`): one row per fact, keyed by `(stream_id, version)` — at once the optimistic lock and the replay order — with a unique `event_id`, a `global_position` identity column for `load_all`, and the event document in `jsonb` exactly as the outbox stores it. `write_journal.journal_snapshots` (Alembic `0005`) checkpoints a stream's state every 50 events.
+- `EventStoreRepository` (`append`, `load_stream`, `load_all`) and `JournalSnapshotRepository` (`latest`, `save`) ports, the `UnitOfWork.event_store`/`journal_snapshots` properties, the request-scoped Dishka providers, and the SQLAlchemy implementations. A lost race for a version raises `EventStoreConcurrencyError` (a `ConcurrentWriteError`, now mapped to 409 by the API), and a stream that cannot be replayed raises `EventStoreCorruptionError` rather than being skipped.
+- `AddJournalEntryCommand` + handler and the `GetJournalTimeline`/`GetJournalAtDate` queries, all reading the event store: the timeline replays the stream, and the dated answer keeps the entries whose care moment is at or before the end of that UTC day.
+- `JournalEntryConsumer` turns a completed watering into a `WATERING` entry, registered with the worker's other consumers (`<prefix>-journal-entries`). It is idempotent twice over: the `(consumer_group, event_id)` ledger plus an entry id derived from the event, so even a rebuilt consumer group appends nothing.
+- `GET /api/v1/journal/{plant_id}` and `GET /api/v1/journal/{plant_id}/at?date=…`.
+- `docs/event-sourcing.md`, plus the journal sections of `docs/domain.md`, `docs/events.md` and `docs/cqrs.md`.
+- Tests: the aggregate's replay, temporal state and snapshot policy (unit), the append and replay paths against an in-memory store (unit), the event/state mappers (unit), the store, its optimistic lock, `load_all` and the automatic checkpoint against Postgres (integration), the consumer's redelivery and rebuilt-group cases (integration), and watering over HTTP → Kafka → journal → dated replay (`tests/e2e/test_journal_flow.py`).
 
 ### Changed
 - Scalar value objects (`Location`, `Moisture`, `Temperature`, `LightLevel`, the care intervals) now serialise as the scalar they wrap, so event payloads are flat (`"location": "Shelf"`) instead of nested (`"location": {"value": "Shelf"}`). Validation still accepts both shapes. Identifiers already behaved this way.
@@ -61,6 +69,9 @@ Versioning: [Semantic Versioning](https://semver.org/).
 - `make iot` and `make iot-drought` no longer print a placeholder: they run the simulator. `make iot-dry-run` is new.
 - `docs/events.md` no longer calls `TelemetryReceived`'s consumer "planned": every catalogued event now has a producer and a consumer.
 - `tests/integration/test_migrations.py` counts modelled tables through `pg_class` (excluding partitions) instead of `pg_tables`, so the partitioned `sensor_readings` parent is included and its monthly children are not mistaken for models.
+- The `sagas` package no longer re-exports its registry: the registry imports every consumer, and the journal's consumer imports the package for its base class, so the re-export would close an import cycle. The registry is imported by its own module name.
+- `journal_entries` moved out of the read side's "built before their producer exists" list: a completed watering now produces `JournalEntryAdded`.
+- `docs/events.md` names `JournalEntryConsumer` as `WateringCompleted`'s write-side consumer and lists its consumer group.
 
 ### Deprecated
 -
