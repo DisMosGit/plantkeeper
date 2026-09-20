@@ -31,7 +31,7 @@
 - ✅ HTTP long polling для уведомлений.
 - ✅ Trefle ACL с Circuit Breaker.
 - ✅ AsyncAPI + OpenAPI + Protobuf контракты.
-- ✅ Покрытие тестами: domain ≥ 90%, application ≥ 80%, infrastructure ≥ 70%.
+- ✅ Покрытие тестами: domain ≥ 90% (100%), application ≥ 80% (97%), infrastructure ≥ 70% (96%).
 - ✅ `make lint && make test` проходят локально.
 
 ---
@@ -1042,37 +1042,92 @@
 > **Цель:** репозиторий готов к показу в портфолио.
 > **Результат фазы:** AsyncAPI, OpenAPI, диаграммы, ADR, документация.
 
+> **Статус:** ✅ выполнено — `make contracts` экспортирует `docs/openapi.json`,
+> `docs/asyncapi-write.json` и `docs/asyncapi-read.json` из тех же регистраций, что
+> обслуживают `make api`, `make workers` и `make admin`, и рендерит
+> `docs/diagrams/event-flow.md` и `docs/diagrams/sagas.md` из реестров событий и
+> списков шагов саг; `docs/architecture.md`, `docs/patterns.md` и ADR `0007`–`0009`
+> на месте, README несёт финальную диаграмму. `make lint` чист, `make test` — 799
+> тестов, покрытие 96% (domain 100%, application 97%, infrastructure 96%).
+> Коммиты созданы локально, push в `origin` не выполнялся.
+
 ### 10.1. Контракты
-- [ ] AsyncAPI-экспорт из FastStream (`docs/asyncapi.json`) · `M`
-- [ ] OpenAPI snapshot в `docs/openapi.json` · `S`
-- [ ] Генерация Mermaid-диаграмм из python-cqrs · `M`
-- [ ] Коммит: `docs: asyncapi + openapi contracts` · `M` 📝
+- [x] AsyncAPI-экспорт из FastStream (`docs/asyncapi-write.json`, `docs/asyncapi-read.json`) · `M` 🧪
+- [x] OpenAPI snapshot в `docs/openapi.json` · `S` 🧪
+- [x] Генерация Mermaid-диаграмм из python-cqrs (`docs/diagrams/`) · `M` 🧪
+- [x] Коммит: `feat(contracts): asyncapi and openapi export` · `M` 📝
 
 ### 10.2. Документация
-- [ ] `docs/architecture.md` — полный BC map + sequence diagrams · `L` 📝
-- [ ] `docs/patterns.md` — таблица паттернов с ссылками на код · `M` 📝
-- [ ] ADR `0007-why-python-cqrs.md` · `M` 📝
-- [ ] ADR `0008-outbox-pattern.md` · `M` 📝
-- [ ] ADR `0009-event-sourcing-journal.md` · `M` 📝
-- [ ] Обновить `README.md` финальной диаграммой · `M` 📝
-- [ ] Коммит: `docs: architecture, patterns, ADRs` · `L` 📝
+- [x] `docs/architecture.md` — полный BC map + sequence diagrams · `L` 📝
+- [x] `docs/patterns.md` — таблица паттернов с ссылками на код · `M` 📝
+- [x] ADR `0007-why-python-cqrs.md` · `M` 📝
+- [x] ADR `0008-outbox-pattern.md` · `M` 📝
+- [x] ADR `0009-event-sourcing-journal.md` · `M` 📝
+- [x] Обновить `README.md` финальной диаграммой · `M` 📝
+- [x] Коммит: `docs: architecture, patterns, ADRs` · `L` 📝
 
 ### 10.3. Тестовое покрытие
-- [ ] Coverage report: domain ≥ 90% · `M` 🧪
-- [ ] Coverage report: application ≥ 80% · `M` 🧪
-- [ ] Coverage report: infrastructure ≥ 70% · `M` 🧪
-- [ ] Отчёт в `docs/coverage.html` (или бейдж) · `S`
-- [ ] Коммит: `test: coverage report` · `M`
+- [x] Coverage report: domain ≥ 90% (факт 100%) · `M` 🧪
+- [x] Coverage report: application ≥ 80% (факт 97%) · `M` 🧪
+- [x] Coverage report: infrastructure ≥ 70% (факт 96%) · `M` 🧪
+- [x] Отчёт в `docs/coverage.html` (gitignored артефакт) · `S`
+- [x] Коммит: `test: coverage report` · `M`
 
 ### 10.4. Финальная вычитка
-- [ ] Пройтись по всем `TODO` в коде — закрыть или завести issues · `M`
-- [ ] Проверить, что нет `print()`, `pdb.set_trace()`, закомментированного кода · `S`
-- [ ] `make lint && make test` — зелёные · `S`
-- [ ] Обновить `CHANGELOG.md` релизом `v0.1.0` · `S`
-- [ ] Тег `v0.1.0` · `S`
-- [ ] Коммит: `chore: release v0.1.0` · `S`
+- [x] Пройтись по всем `TODO` в коде — их нет; отложенное зафиксировано в `docs/events.md` и `docs/sagas.md` · `M`
+- [x] Проверить, что нет `print()`, `pdb.set_trace()`, закомментированного кода (единственный `print()` — вывод CLI `tools/protogen.py`) · `S`
+- [x] `make lint && make test` — зелёные · `S`
+- [x] Обновить `CHANGELOG.md` релизом `v0.1.0` · `S`
+- [x] Тег `v0.1.0` · `S`
+- [x] Коммит: `chore: release v0.1.0` · `S`
 
 **✅ Phase 10 завершена, когда:** README рендерит полную диаграмму, все ADR на месте, `v0.1.0` тегирован.
+
+**Отклонения и уточнения:**
+- **Один AsyncAPI на процесс, а не один на платформу.** Роадмап называет
+  `docs/asyncapi.json`; получилось `docs/asyncapi-write.json` (воркер) и
+  `docs/asyncapi-read.json` (Django-проекции). Причина — контракт слоёв:
+  `apps/admin` и `apps/workers` не могут импортировать друг друга, а генерация
+  read-документа требует сконфигурированного Django. Один файл собирался бы
+  процессом, который импортирует и Django, и воркер, то есть ровно там, где
+  граница протекает. Оба файла пишутся одной командой `make contracts`; старый
+  `docs/asyncapi.json` остаётся в `.gitignore` как алиас прошлых планов.
+- **Контракты не коммитятся, диаграммы коммитятся.** `.gitignore` уже исключал
+  `docs/openapi.json` и `docs/asyncapi.json` — тот же принцип, по которому в Phase 7
+  не коммитятся gRPC-стабы: артефакт, который генерируется из кода, не должен
+  расходиться с ним в истории. Mermaid-блок в Markdown читается на GitHub, поэтому
+  `docs/diagrams/*.md` в индексе, а `make diagrams` их пересобирает; `--check` и тесты
+  ловят расхождение. `docs/coverage.html` — тоже gitignored артефакт `make coverage`.
+- **AsyncAPI описывает консьюмеров, каталог событий — расширением.** Продюсер
+  write-стороны — это `OutboxRelay`, читающий `write_shared.outbox`, а не
+  FastStream-роут, поэтому документация продюсеров недостижима из AsyncAPI. Оба
+  документа несут `x-plantkeeper-event-catalogue` — 26 событий с топиком, продюсером
+  и консьюмерами, собранных из `EVENT_TOPICS`, реестра саг и проекций.
+- **Каналы получили заголовки.** FastStream берёт ключ AsyncAPI-канала из заголовка
+  подписки, а иначе — из имени функции-обработчика; у всех обработчиков оно `handle`,
+  поэтому несколько групп на одном топике схлопывались в один канал и документ молча
+  терял все, кроме последнего. Подписки воркера и проекции админки теперь передают
+  `title=<topic> to <consumer group>`, а `tests/unit/contracts/` падает на
+  `RuntimeWarning` столкновения каналов.
+- **Mermaid-диаграммы — из двух источников, а не только из python-cqrs.** Роадмап
+  просит диаграммы из python-cqrs: `SagaMermaid` и даёт `docs/diagrams/sagas.md` из
+  реальных списков шагов. Поток событий библиотека не описывает вовсе (`CoRMermaid`
+  рисует цепочки `CORRequestHandler`, которых в проекте нет), поэтому
+  `docs/diagrams/event-flow.md` строится из `EVENT_TOPICS` и реестров консьюмеров.
+  Потребительские рёбра рисуются только между контекстами: событие, которое читает
+  собственный контекст, — это норма, и рисовать её значило бы пересказать каталог.
+- **`saga_name` объявлен на триггерах.** `OnboardPlantTrigger` и `SpeciesSyncTrigger`
+  теперь называют сагу, которую запускают; это единственная правка application-слоя
+  фазы. Без неё каталог не может подписать триггер сагой, не прибегая к совпадению
+  индексов двух кортежей в реестре.
+- **Пороговые флоры живут в `make coverage`, а не в `fail_under`.** pytest-cov берёт
+  один `--cov`, поэтому разрезы по слоям считаются из сохранённого `.coverage`
+  (`coverage report --include=...`) после полного прогона. Глобальный `fail_under`
+  сломал бы `make test-unit` и `make test-domain`, которые покрывают по одному слою.
+- **Новых зависимостей нет:** `faststream`, `fastapi`, `django` и `python-cqrs` уже
+  объявлены; JSON пишется стандартной библиотекой, `pyyaml` не понадобился.
+- Нумерация ADR не менялась: `0007-why-python-cqrs`, `0008-outbox-pattern`,
+  `0009-event-sourcing-journal` использованы по номерам, зарезервированным с Phase 2.
 
 ---
 
