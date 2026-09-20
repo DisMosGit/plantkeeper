@@ -32,6 +32,12 @@ Versioning: [Semantic Versioning](https://semver.org/).
 - `make admin` (read side on :8001) and `make admin-static`; `make migrate` now applies the Alembic write schema **and** the Django read schema.
 - `docs/cqrs.md`, `docs/adr/0004-read-side-projections.md`, and a read-side section in `docs/events.md`.
 - Tests: the projection contract and behaviour (`tests/integration/test_projections.py`, including the transaction rollback of a failed projection), the read-model settings (`tests/unit/admin/`), and the end-to-end write → Kafka → projection → Django Admin path (`tests/e2e/test_cqrs_read_side.py`).
+- Phase 4 sagas: `OnboardPlantSaga` (resolve the species, create the schedule, create the first reminder, publish `PlantOnboarded`) and `SpeciesSyncSaga` (fetch, diff, publish `SpeciesUpdated`, invalidate the cache) as `python-cqrs` orchestration sagas with per-step compensation; `AdaptiveWateringSaga` (dry soil pulls a far-away watering forward, overwatering raises one reminder) and `MissedCareSaga` (a 24-hour grace window ending in `CareMissed`) as choreography consumers.
+- Four saga lifecycle events (`SagaStarted`, `SagaCompleted`, `SagaFailed`, `SagaCompensated`) on a new `saga.events` topic, taking the catalogue to 25.
+- Write-side consumer infrastructure: `write_shared.processed_events` (idempotency on `(consumer_group, event_id)` in the same transaction as the work), `write_shared.saga_state` + `write_shared.saga_log` (Alembic `0002`, behind a project-owned `ISagaStorage`), and `write_care.missed_care_windows` (the grace-period timer).
+- `apps/workers` now consumes: `register_consumers` attaches one group per saga to its topics before the broker starts, and the worker runs three background jobs next to the outbox relay — the missed-care tick, the daily catalogue trigger, and saga recovery.
+- `docs/sagas.md`, `docs/adr/0005-orchestration-vs-choreography.md`, a saga section in `docs/events.md`, and `.env.example` entries for the worker settings.
+- Tests: the saga registry and stop contracts (unit), the four sagas including both compensations and the grace period (integration), the schedulers and the recovery job against the real container (integration), and adding a plant → schedule + reminder + `PlantOnboarded` end to end (`tests/e2e/test_saga_flow.py`).
 
 ### Changed
 - Scalar value objects (`Location`, `Moisture`, `Temperature`, `LightLevel`, the care intervals) now serialise as the scalar they wrap, so event payloads are flat (`"location": "Shelf"`) instead of nested (`"location": {"value": "Shelf"}`). Validation still accepts both shapes. Identifiers already behaved this way.
@@ -40,6 +46,10 @@ Versioning: [Semantic Versioning](https://semver.org/).
 - `Settings` gains `read_side_consumer_group_prefix`; the read side reads the same `.env` as the services.
 - `docs/events.md` lists each event's real consumer (the projections) instead of a planned one.
 - Mypy ignores `django.*` imports and relaxes `disallow_subclassing_any` for `plantkeeper.admin.*`, because Django ships no `py.typed`; Ruff's RUF012 is off for the Django models and migrations, whose declarative class attributes are mutable by design.
+- `Settings` gains `worker_consumer_group_prefix` and the four scheduler/recovery timers; `make workers` now runs the sagas' consumers and timers, not just the relay.
+- `apps/workers` declares `python-cqrs` directly, as `apps/api` already did: the worker resolves each saga and its steps through the library's dispatcher.
+- The Kafka decoder (`decode_event`, its header/body readers) moved from `apps/admin` into `plantkeeper.infrastructure.messaging.decoding`, so the read side's projections and the write side's sagas read one contract (`apps/admin` and `apps/workers` may not import each other).
+- The `partition_key_for` field list gains `saga_id`, so a saga's four lifecycle events stay in one partition.
 
 ### Deprecated
 -

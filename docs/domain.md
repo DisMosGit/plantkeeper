@@ -70,10 +70,12 @@ Journal: `JournalEntryAdded`.
 Telemetry: `TelemetryReceived`, `SoilMoistureLow`, `SoilMoistureHigh`,
 `TemperatureAnomaly`, `SensorOffline`.
 Notifications: `NotificationCreated`, `NotificationRead`.
+Saga / system: `SagaStarted`, `SagaCompleted`, `SagaFailed`, `SagaCompensated`.
 
-The payload catalogue — producer, payload fields and planned consumers — is in
-[`docs/events.md`](events.md). The four saga events (`SagaStarted`, `SagaCompleted`,
-`SagaFailed`, `SagaCompensated`) arrive with the sagas in Phase 4.
+The payload catalogue — producer, payload fields and consumers — is in
+[`docs/events.md`](events.md). The saga events report the progress of the process
+managers described in [`docs/sagas.md`](sagas.md); they are catalogued here because
+every message on Kafka is a `DomainEvent`, not because they are aggregate facts.
 
 ## Aggregate map
 

@@ -1,9 +1,11 @@
 # CQRS: the write side and the read side
 
-> **Status:** Phase 3 — the read path works end to end. `POST /api/v1/plants`
-> becomes a row in `read_analytics.plants` and appears in Django Admin. The
-> decisions behind this document are in
-> [ADR 0004](adr/0004-read-side-projections.md).
+> **Status:** Phase 4 — the read path works end to end. `POST /api/v1/plants`
+> becomes a row in `read_analytics.plants` and appears in Django Admin, and the
+> same event starts the write side's onboarding saga, which is what fills the care
+> and notification columns. The decisions behind this document are in
+> [ADR 0004](adr/0004-read-side-projections.md); the write side's consumers are in
+> [`docs/sagas.md`](sagas.md) and [ADR 0005](adr/0005-orchestration-vs-choreography.md).
 
 PlantKeeper runs two persistence dialects that never mix. Commands go through
 `python-cqrs` into the **write** schemas, managed by SQLAlchemy and Alembic.

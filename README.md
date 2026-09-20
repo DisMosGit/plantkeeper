@@ -48,7 +48,7 @@ uv sync --all-packages    # install the workspace
 make dev                  # start Kafka (KRaft), Postgres, Valkey, Redpanda Console
 make migrate              # apply the schemas (Alembic write_*, Django read_analytics)
 make api                  # FastAPI on http://localhost:8000 (OpenAPI at /docs)
-make workers              # the outbox relay, which publishes to Kafka
+make workers              # outbox relay + the four sagas' consumers and timers
 make admin                # read side on http://localhost:8001/admin/ (projections + Django Admin)
 make lint                 # ruff + mypy + import-linter
 make test                 # pytest
@@ -57,12 +57,14 @@ make clean                # stop infra and drop volumes
 
 The system runs as three processes on purpose. `make api` answers HTTP and commits
 each command together with the events it produced into the outbox; `make workers`
-runs the relay that publishes those events to Kafka; `make admin` consumes them
-into the `read_analytics` schema and serves Django Admin over it. Nothing in the
-API process talks to the broker, so a slow Kafka cannot slow a request down, and
-nothing in the read side reads a write schema. See
-[`docs/events.md`](docs/events.md) for the topic, header and key contract and
-[`docs/cqrs.md`](docs/cqrs.md) for the two sides.
+runs the relay that publishes those events to Kafka, the write-side consumers that
+run the sagas, and their timers (the missed-care tick, the daily catalogue trigger
+and saga recovery); `make admin` consumes them into the `read_analytics` schema and
+serves Django Admin over it. Nothing in the API process talks to the broker, so a
+slow Kafka cannot slow a request down, and nothing in the read side reads a write
+schema. See [`docs/events.md`](docs/events.md) for the topic, header and key
+contract, [`docs/cqrs.md`](docs/cqrs.md) for the two sides, and
+[`docs/sagas.md`](docs/sagas.md) for the process managers.
 
 Local infrastructure endpoints:
 
@@ -83,6 +85,7 @@ Connection settings are documented in `.env.example`.
 - [`docs/domain.md`](docs/domain.md) — ubiquitous language, aggregates, invariants
 - [`docs/events.md`](docs/events.md) — event catalogue and its Kafka transport
 - [`docs/cqrs.md`](docs/cqrs.md) — write schema, read schema, projections
+- [`docs/sagas.md`](docs/sagas.md) — the four process managers, their compensations and their timers
 - [`docs/adr/`](docs/adr/) — architecture decision records
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — branches, commits, local workflow
 - [`CHANGELOG.md`](CHANGELOG.md) — release history

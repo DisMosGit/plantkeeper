@@ -408,53 +408,124 @@
 > **Цель:** 4 саги с компенсациями.
 > **Результат фазы:** онбординг растения запускает цепочку, адаптивный полив реагирует на телеметрию.
 
+> **Статус:** ✅ выполнено — `OnboardPlantSaga` и `SpeciesSyncSaga` работают на
+> движке саг `python-cqrs`, `AdaptiveWateringSaga` и `MissedCareSaga` — как
+> choreography-consumer'ы в `apps/workers`; `make workers` поднимает relay,
+> консьюмеров саг и их таймеры. `make lint && make test` зелёные (452 теста,
+> покрытие 97%), `make migrate` применяет Alembic `0002`. Коммиты созданы локально,
+> push в `origin` не выполнялся.
+
 ### 4.1. Инфраструктура саг
-- [ ] Таблица `saga_state` (saga_id, type, state, step, created_at, updated_at) · `M`
-- [ ] `SagaStateRepository` · `M` 🧪
-- [ ] Базовый класс `Saga` (orchestration): steps, compensate, `handle_event` · `M` 🧪
-- [ ] Интеграция с `python-cqrs` SagaMap · `M` 📝
-- [ ] Коммит: `feat(application): saga infrastructure` · `L` 🧪
+- [x] Таблица `saga_state` (saga_id, type, state, step, created_at, updated_at) · `M`
+- [x] `SagaStateRepository` · `M` 🧪
+- [x] Базовый класс `Saga` (orchestration): steps, compensate, `handle_event` · `M` 🧪
+- [x] Интеграция с `python-cqrs` SagaMap · `M` 📝
+- [x] Коммит: `feat(application): saga infrastructure` · `L` 🧪
 
 ### 4.2. OnboardPlantSaga (orchestration)
-- [ ] Шаг 1: получить `species_id` из Catalog (через ACL) · `M` 🧪
-- [ ] Шаг 2: создать `CareSchedule` (из species.watering_interval) · `M` 🧪
-- [ ] Шаг 3: создать первое напоминание (Notification) · `M` 🧪
-- [ ] Шаг 4: publish `PlantOnboarded` · `S` 🧪
-- [ ] Компенсация: удалить CareSchedule + Notification при ошибке · `M` 🧪
-- [ ] Тест: успешный путь · `M` 🧪
-- [ ] Тест: компенсация при ошибке в шаге 2 · `M` 🧪
-- [ ] Коммит: `feat(application): OnboardPlantSaga` · `L` 🧪
+- [x] Шаг 1: получить `species_id` из Catalog (через ACL) · `M` 🧪
+- [x] Шаг 2: создать `CareSchedule` (из species.watering_interval) · `M` 🧪
+- [x] Шаг 3: создать первое напоминание (Notification) · `M` 🧪
+- [x] Шаг 4: publish `PlantOnboarded` · `S` 🧪
+- [x] Компенсация: удалить CareSchedule + Notification при ошибке · `M` 🧪
+- [x] Тест: успешный путь · `M` 🧪
+- [x] Тест: компенсация при ошибке в шаге 2 · `M` 🧪
+- [x] Коммит: `feat(application): OnboardPlantSaga` · `L` 🧪
 
 ### 4.3. AdaptiveWateringSaga (choreography)
-- [ ] Consumer на `TelemetryReceived` — оценить moisture < threshold · `M` 🧪
-- [ ] Проверить: до планового полива > 2 дня? · `S` 🧪
-- [ ] Опубликовать `WateringRescheduled` · `S` 🧪
-- [ ] Обработка `SoilMoistureHigh` (перелив) · `M` 🧪
-- [ ] Тест: сухая почва → сдвиг расписания · `M` 🧪
-- [ ] Тест: перелив → уведомление · `M` 🧪
-- [ ] Коммит: `feat(application): AdaptiveWateringSaga` · `M` 🧪
+- [x] Consumer на `TelemetryReceived` — оценить moisture < threshold · `M` 🧪
+- [x] Проверить: до планового полива > 2 дня? · `S` 🧪
+- [x] Опубликовать `WateringRescheduled` · `S` 🧪
+- [x] Обработка `SoilMoistureHigh` (перелив) · `M` 🧪
+- [x] Тест: сухая почва → сдвиг расписания · `M` 🧪
+- [x] Тест: перелив → уведомление · `M` 🧪
+- [x] Коммит: `feat(application): AdaptiveWateringSaga` · `M` 🧪
 
 ### 4.4. MissedCareSaga
-- [ ] Cron / scheduled event `WateringDue` · `M` 🧪
-- [ ] Grace period 24ч (scheduled check) · `M` 🧪
-- [ ] Публикация `CareMissed` + Notification · `S` 🧪
-- [ ] Сдвиг расписания · `S` 🧪
-- [ ] Тест: `WateringDue` без `WateringCompleted` → `CareMissed` через 24ч (freezegun) · `M` 🧪
-- [ ] Коммит: `feat(application): MissedCareSaga` · `M` 🧪
+- [x] Cron / scheduled event `WateringDue` · `M` 🧪
+- [x] Grace period 24ч (scheduled check) · `M` 🧪
+- [x] Публикация `CareMissed` + Notification · `S` 🧪
+- [x] Сдвиг расписания · `S` 🧪
+- [x] Тест: `WateringDue` без `WateringCompleted` → `CareMissed` через 24ч (freezegun) · `M` 🧪
+- [x] Коммит: `feat(application): MissedCareSaga` · `M` 🧪
 
 ### 4.5. SpeciesSyncSaga
-- [ ] Триггер: cron раз в сутки + ручной `POST /catalog/sync` · `M` 🧪
-- [ ] Fetch Trefle → diff → publish `SpeciesUpdated` для изменённых · `M` 🧪
-- [ ] Инвалидация Valkey-кэша · `S` 🧪
-- [ ] Компенсация: откат к предыдущей версии species при ошибке · `M` 🧪
-- [ ] Коммит: `feat(application): SpeciesSyncSaga` · `L` 🧪
+- [x] Триггер: cron раз в сутки + ручной `POST /catalog/sync` · `M` 🧪
+- [x] Fetch Trefle → diff → publish `SpeciesUpdated` для изменённых · `M` 🧪
+- [x] Инвалидация Valkey-кэша · `S` 🧪
+- [x] Компенсация: откат к предыдущей версии species при ошибке · `M` 🧪
+- [x] Коммит: `feat(application): SpeciesSyncSaga` · `L` 🧪
 
 ### 4.6. Документация саг
-- [ ] `docs/sagas.md` — описание 4 саг с диаграммами (Mermaid sequence) · `L` 📝
-- [ ] ADR `0005-orchestration-vs-choreography.md` · `M` 📝
-- [ ] Коммит: `docs: sagas description` · `M` 📝
+- [x] `docs/sagas.md` — описание 4 саг с диаграммами (Mermaid sequence) · `L` 📝
+- [x] ADR `0005-orchestration-vs-choreography.md` · `M` 📝
+- [x] Коммит: `docs: sagas description` · `M` 📝
 
 **✅ Phase 4 завершена, когда:** 4 саги покрыты тестами, `docs/sagas.md` заполнен.
+
+**Отклонения и уточнения:**
+- **Свой `ISagaStorage`.** Библиотечный `SqlAlchemySagaStorage` держит таблицы без
+  схемы (`saga_executions`/`saga_logs`), берёт их имена из env **на импорте** и
+  объявляет вторую declarative base. Наш адаптер реализует тот же протокол над
+  `write_shared.saga_state` / `write_shared.saga_log`, которые создаёт Alembic
+  `0002`. Причина и последствия — ADR 0005.
+- **`saga_state` разбита на две таблицы.** Колонка `step` из роадмапа не может
+  восстановить, *какие* шаги уже прошли и что компенсировать; историю шагов
+  хранит `saga_log`, а `saga_state` — статус, контекст, версию и счётчик recovery.
+- **Choreography — это `Consumer`, а не `Saga`.** `AdaptiveWateringSaga` и
+  `MissedCareSaga` не имеют процесса-координатора, поэтому у них нет шагов и
+  компенсаций, а есть реакция на событие. Таймер MissedCare — строка
+  `write_care.missed_care_windows`, а не таблица `saga_state`.
+- **`python-cqrs` саги не событийные.** Движок запускается по типу контекста, а не
+  по событию, поэтому каждое событие-триггер сначала превращается в контекст
+  (`Saga.context_from_event`); `handle_event` — наш метод, а не библиотечный.
+- **Контекст саги — dataclass, а не Pydantic.** Это требование библиотеки
+  (`SagaContext.to_dict/from_dict` через `dataclass_wizard`); поля контекста —
+  JSON-скаляры, и в них не протекает устройство домена. Доменные события остаются
+  Pydantic.
+- **Базовый класс `Saga` не параметризован контекстом.** Класс наследует
+  `__orig_bases__`, поэтому `Saga[SagaContext]` заставил бы валидатор библиотеки
+  читать *базовый* контекст у каждой конкретной саги и отвергать её шаги. Тип
+  контекста объявлен в `context_type` и по нему строится `SagaMap`.
+- **Детерминированный `saga_id`** = `uuid5(<saga_name>, <correlation_id>)`: повторная
+  доставка возобновляет ту же сагу, а не создаёт вторую.
+- **События жизненного цикла саг** (`SagaStarted`, `SagaCompleted`, `SagaFailed`,
+  `SagaCompensated`) добавлены в Phase 4 и публикуются в новый топик `saga.events`
+  (каталог 21 → 25 событий). Их не проецирует ни одна read-модель.
+- **Идемпотентность write-side консьюмеров** — новая таблица
+  `write_shared.processed_events` с уникальностью `(consumer_group, event_id)`;
+  в роадмапе 4.1 её не было, но `AGENTS.md` требует идемпотентности от каждого
+  консьюмера, а `read_analytics.processed_events` принадлежит Django.
+- **Джоб восстановления саг** (`SagaRecoveryJob`) добавлен сверх роадмапа: без него
+  сага, упавшая в `running`, остаётся там навсегда. Он использует библиотечный
+  `recover_saga` и ограничен настройками `SAGA_RECOVERY_*`.
+- **`SagaStateRepository` пока без вызывающего в проде.** Recovery ходит в
+  библиотечный `ISagaStorage.get_sagas_for_recovery`, который отвечает только
+  идентификаторами и фильтрует по имени саги; 4.1 требует репозиторий, поэтому он
+  оставлен как читающий фасад над той же таблицей (`get` + `list_recoverable`) и
+  покрыт интеграционным тестом. По той же причине в реестре есть `saga_type_named`:
+  `saga_state` хранит имя класса, и это единственный обратный путь к самой саге.
+- **Вместо freezegun** (роадмап 4.4) тест двигает `Clock` порт: в проекте время —
+  это зависимость, которую подменяет тест, а не заморозка процесса.
+- **Компенсация при ошибке в шаге 2** (роадмап 4.2) проверена как ошибка в шаге 3:
+  падение именно второго шага не оставляет данных и потому ничего не компенсирует;
+  тест проверяет откат уже созданного расписания.
+- **`SpeciesSyncSaga` не создаёт виды.** В каталоге нет события «вид создан», поэтому
+  незнакомый `species_id` пропускается с предупреждением; создание — вопрос Phase 9
+  вместе с Trefle. `SpeciesSource` в Phase 4 — заглушка, возвращающая пустой список;
+  «инвалидация кэша» публикует `SpeciesCacheInvalidated`, а Valkey-консьюмер — Phase 9.
+- **Общий декодер Kafka** (`decode_event` с header/body) переехал из
+  `apps/admin` в `plantkeeper.infrastructure.messaging.decoding`: `apps/admin` и
+  `apps/workers` не могут импортировать друг друга (контракт слоёв).
+- **`partition_key_for`** теперь учитывает `saga_id`, иначе события одной саги
+  разъехались бы по партициям.
+- **`make workers` теперь и консьюмер, а не только relay**; lifecycle воркера
+  (`run`, `_request_shutdown`, сборка джобов) вынесен так, чтобы его можно было
+  тестировать, а stop-контракт джобов покрыт unit-тестом.
+- Новых зависимостей нет: `python-cqrs` объявлен в `apps/workers` напрямую (как уже
+  было в `apps/api`), остальное — существующие SQLAlchemy, Dishka, FastStream.
+- ADR последующих фаз не менялись: `0006-rest-and-grpc` (Phase 7),
+  `0007-why-python-cqrs`, `0008-outbox-pattern`, `0009-event-sourcing-journal` (Phase 10).
 
 ---
 
