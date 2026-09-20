@@ -52,8 +52,8 @@ test-integration: ## Integration tests (needs Docker)
 test-e2e: ## End-to-end tests (need `make dev`)
 	uv run pytest tests/e2e -m slow
 
-migrate: ## Apply all migrations (added in Phase 2/3)
-	@echo "No migrations yet: Alembic lands in Phase 2, Django migrations in Phase 3."
+migrate: ## Apply all migrations (Alembic write schema; Django read models in Phase 3)
+	uv run alembic upgrade head
 
 iot: ## Run the IoT simulator, normal scenario (added in Phase 5)
 	@echo "IoT simulator lands in Phase 5: uv run python -m plantkeeper.iot_simulator --scenario normal"
