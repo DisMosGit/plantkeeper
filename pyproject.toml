@@ -19,9 +19,74 @@ members = ["packages/*", "apps/*", "tools/*"]
 
 [dependency-groups]
 dev = [
+    "import-linter>=2.15",
     "mypy>=2.3.1",
+    "pre-commit>=4.6.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
     "ruff>=0.16.8",
     "testcontainers>=4.15.0",
 ]
+
+# -----------------------------------------------------------------------------
+# Ruff
+# -----------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+src = [
+    "packages/domain/src",
+    "packages/application/src",
+    "packages/infrastructure/src",
+    "apps/api/src",
+    "apps/admin/src",
+    "apps/workers/src",
+    "tools/iot-simulator/src",
+    "tests",
+]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "ANN", "RUF", "PTH"]
+# `Any` is banned by AGENTS.md; ANN401 would only duplicate that rule while making
+# unavoidable third-party boundary annotations noisy.
+ignore = ["ANN401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["plantkeeper"]
+
+# -----------------------------------------------------------------------------
+# Mypy (strict)
+# -----------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.14"
+strict = true
+warn_unreachable = true
+# `uv run mypy .` must not descend into the virtualenv.
+exclude = ['^\.venv/', '^build/', '^dist/']
+
+# -----------------------------------------------------------------------------
+# pytest
+# -----------------------------------------------------------------------------
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "integration: needs Docker (testcontainers)",
+    "slow: end-to-end test through docker compose",
+]
+
+# -----------------------------------------------------------------------------
+# Coverage
+# -----------------------------------------------------------------------------
+[tool.coverage.run]
+branch = true
+source = ["plantkeeper"]
+
+[tool.coverage.report]
+show_missing = true
+# The per-layer floors (domain 90%, application 80%, infrastructure 70%) are
+# enabled in Phase 10; a non-zero floor would fail `make test` on the skeleton.
+fail_under = 0
+

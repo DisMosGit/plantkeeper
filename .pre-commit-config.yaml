@@ -1,0 +1,42 @@
+# pre-commit hooks for PlantKeeper.
+#
+#   uv run pre-commit install          # install the git hook
+#   uv run pre-commit run --all-files  # run everything once
+#
+# Ruff and Mypy run through `uv run` so they use exactly the versions pinned in
+# uv.lock together with the workspace virtualenv. The mirrors-* hook repositories
+# would need their own dependency pins, which would drift from the lockfile.
+
+fail_fast: false
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --fix
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+      - id: mypy
+        name: mypy (strict, whole project)
+        entry: uv run mypy .
+        language: system
+        pass_filenames: false
+        always_run: true
