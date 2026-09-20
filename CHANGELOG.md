@@ -61,9 +61,19 @@ Versioning: [Semantic Versioning](https://semver.org/).
 - `make grpc` runs the server on `0.0.0.0:50051` (`python -m plantkeeper.api.grpc`): the two services, the health service and server reflection, reusing `api_providers()` and never building a Kafka broker.
 - `docs/grpc.md` and `docs/adr/0006-rest-and-grpc.md`; `apps/api` gains runtime dependencies `protobuf`, `grpcio-health-checking` and `grpcio-reflection`, with `grpcio-tools` as a dev dependency.
 - Tests: the error table and the view→wire mapping (unit), the generated stub contract (unit), and the served surface end to end — health, reflection, care, garden and the failure statuses (`tests/e2e/test_grpc_services.py`).
+- Phase 8 notifications: `NotificationChannel` port (`publish`/`subscribe`, `NotificationSubscription.wait`, `NotificationChannelError`) and the Valkey adapter `ValkeyNotificationChannel` over a per-household channel `household:<id>`, provided by a new `NotificationProvider`.
+- `NotificationConsumer` turns `WateringDue`, `WateringRescheduled`, `CareMissed`, `SoilMoistureLow` and `TemperatureAnomaly` into notifications, and `NotificationPusher` consumes `NotificationCreated` and wakes the household's long poll. Both are ordinary write-side consumers with their own groups and `(consumer_group, event_id)` ledgers, registered in the saga registry and `make workers`.
+- `GET /api/v1/notifications/pending?household_id=…&timeout=…` is now an HTTP long poll: it answers `200` with the pending notifications, waits on the household's channel when there are none, and answers `204 No Content` when the timeout passes with nothing. `timeout` defaults to `0` (immediate) and is capped at 60 seconds.
+- The telemetry ingress now calls `Sensor.record(...)` and appends every event the reading raises to the outbox, so `SoilMoistureLow`, `SoilMoistureHigh` and `TemperatureAnomaly` have a real producer. `SoilMoistureHigh` now reaches `AdaptiveWateringSaga` in production, and `NotificationConsumer` consumes the low-moisture and temperature-anomaly ones.
+- `NotificationView`/`NotificationResponse` gained `payload`, so a client can tell which plant a reminder concerns.
+- Tests: the channel's publish/subscribe/timeout/isolation contract against a real Valkey (integration), the consumer and pusher including redelivery, rebuilt-group, unknown-plant and unread-guard cases (integration), the threshold events in the ingress (unit), and event → notification → long poll end to end (`tests/e2e/test_long_polling.py`, plus Valkey container fixtures in `tests/conftest.py`).
+- `docs/notifications.md`.
 
 ### Changed
 - Scalar value objects (`Location`, `Moisture`, `Temperature`, `LightLevel`, the care intervals) now serialise as the scalar they wrap, so event payloads are flat (`"location": "Shelf"`) instead of nested (`"location": {"value": "Shelf"}`). Validation still accepts both shapes. Identifiers already behaved this way.
+- `GET /api/v1/notifications/pending` answers `204 No Content` where it used to answer `200 {"items": []}`; a long poll has one way of saying "nothing", and the empty collection is gone.
+- The `care_missed` notification moved from `MissedCareSaga` to `NotificationConsumer`: the saga owns the schedule and the grace window, and the Notifications context owns what the household sees. One producer per notification type.
+- The worker now needs Valkey (`VALKEY_URL`), because `NotificationPusher` wakes long polls through it. A channel failure is logged and does not fail the delivery.
 - `make test` now runs the integration and end-to-end suites as well; the container fixtures are lazy, so `make test-unit` still needs no Docker.
 - Planned ADRs in `ROADMAP.md` are renumbered by one from Phase 4 onwards, because `docs/adr/0003-write-side-outbox.md` takes slot 3.
 - `Settings` gains `read_side_consumer_group_prefix`; the read side reads the same `.env` as the services.

@@ -1,10 +1,10 @@
 # Architecture
 
-> **Status:** Phases 0–7 are implemented: the write path with its transactional
+> **Status:** Phases 0–8 are implemented: the write path with its transactional
 > outbox, the CQRS read side, the four sagas, the IoT simulator with its telemetry
-> ingress, the Journal as an event-sourced aggregate, and the gRPC surface over the
-> same application layer. Later phases add long-polling notifications (8), the
-> Trefle ACL (9) and the assembled contracts (10) — see
+> ingress, the Journal as an event-sourced aggregate, the gRPC surface over the
+> same application layer, and notifications delivered by HTTP long polling. Later
+> phases add the Trefle ACL (9) and the assembled contracts (10) — see
 > [`ROADMAP.md`](../ROADMAP.md).
 
 ## Overview
@@ -28,7 +28,7 @@ contexts.
 | Notifications | Notifications delivered by HTTP long polling | `write_notifications` |
 | Analytics | Read models for Django Admin and reports | `read_analytics` |
 
-Event directions: Garden → Care → Journal → Analytics, Telemetry → Care, Catalog → Garden.
+Event directions: Garden → Care → Journal → Analytics, Telemetry → Care, Care and Telemetry → Notifications, Catalog → Garden.
 
 ## Context map
 
@@ -36,9 +36,10 @@ Event directions: Garden → Care → Journal → Analytics, Telemetry → Care,
 graph LR
   Catalog -- SpeciesUpdated --> Garden
   Garden -- PlantAdded / PlantOnboarded --> Care
-  Care -- WateringDue / WateringCompleted / CareMissed --> Notifications
+  Care -- WateringDue / WateringRescheduled / CareMissed --> Notifications
   Care -- JournalEntryAdded --> Journal
   Telemetry -- TelemetryReceived --> Care
+  Telemetry -- SoilMoistureLow / TemperatureAnomaly --> Notifications
   Care --> Analytics
   Journal --> Analytics
   Garden --> Analytics

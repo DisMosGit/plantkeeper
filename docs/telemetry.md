@@ -1,9 +1,12 @@
 # Telemetry
 
-> **Status:** Phase 5. The producer is [`tools/iot-simulator`](iot-simulator.md); the
-> consumer is `plantkeeper.application.telemetry` running in `apps/workers`. The
+> **Status:** Phase 5, extended in Phase 8. The producer is
+> [`tools/iot-simulator`](iot-simulator.md); the consumer is
+> `plantkeeper.application.telemetry` running in `apps/workers`. Since Phase 8 the
+> ingress also calls `Sensor.record`, so the threshold events have a real producer
+> and feed the notifications of [`docs/notifications.md`](notifications.md). The
 > read-side projections for telemetry, and the windowed aggregation over it, are
-> Phase 8's `docs/telemetry.md` work and are deliberately not here yet.
+> still deferred and deliberately not here yet.
 
 ## Two topics, two kinds of message
 
@@ -13,7 +16,7 @@ worth being explicit about how far the raw stream travels:
 | Topic | Message | Produced by | Consumed by |
 |-------|---------|-------------|-------------|
 | `telemetry.raw` | a raw measurement: `sensor_id`, `recorded_at`, `moisture`, `temperature`, `light` | the IoT simulator, directly | the telemetry ingress |
-| `telemetry.events` | the `TelemetryReceived` / `SoilMoistureLow` / `SoilMoistureHigh` / `TemperatureAnomaly` / `SensorOffline` domain events | the outbox relay | `AdaptiveWateringSaga`, the read side |
+| `telemetry.events` | the `TelemetryReceived` / `SoilMoistureLow` / `SoilMoistureHigh` / `TemperatureAnomaly` / `SensorOffline` domain events | the outbox relay | `AdaptiveWateringSaga`, `NotificationConsumer`, the read side |
 
 `telemetry.raw` is **not** an event topic. It is not in
 `plantkeeper.infrastructure.messaging.topics.EVENT_TOPICS`, nothing in the event
@@ -105,9 +108,16 @@ default interval is daily, the window is three months) or move the rows first.
 One delivery is one transaction:
 
 1. `INSERT … ON CONFLICT DO NOTHING` the reading;
-2. append `TelemetryReceived` to `write_shared.outbox`, but only if the insert was the
-   one that stored the row;
+2. call `Sensor.record(reading)` and append **every event the aggregate raised** to
+   `write_shared.outbox` — `TelemetryReceived` always, plus the threshold event
+   when the reading crossed one (`SoilMoistureLow`, `SoilMoistureHigh`,
+   `TemperatureAnomaly`) — but only if the insert was the one that stored the row;
 3. commit.
+
+The sensor row itself is not written: `record` updates the aggregate's
+`last_seen_at` in memory only. Phase 5 decided that a reading is not worth an
+`UPDATE` on the sensor, and the readings table already answers "when did this
+sensor last report". The aggregate is called for its *decisions*, not its state.
 
 A delivery whose row is already there therefore commits nothing and announces nothing:
 its event travelled in the transaction that stored the reading, and a second

@@ -112,17 +112,17 @@ write side's ([`docs/sagas.md`](sagas.md)).
 | `PlantAdded` | `plant_id`, `household_id`, `species_id`, `name`, `location`, `added_at` | `Plant` (`add`) | `GardenProjection`; `OnboardPlantSaga` |
 | `PlantRemoved` | `plant_id`, `removed_at` | `Plant` (`remove`) | `GardenProjection` |
 | `PlantMoved` | `plant_id`, `previous_location`, `location` | `Plant` (`move`) | `GardenProjection` |
-| `PlantOnboarded` | `plant_id`, `household_id`, `species_id`, `next_watering_at` | `OnboardPlantSaga` | `GardenProjection`; Notifications (Phase 8) |
+| `PlantOnboarded` | `plant_id`, `household_id`, `species_id`, `next_watering_at` | `OnboardPlantSaga` | `GardenProjection` |
 
 ### Care
 
 | Event | Payload | Emitted by | Consumed by |
 |-------|---------|-----------|-------------|
 | `CareScheduleCreated` | `plant_id`, `watering_interval`, `next_watering_at` | `CareSchedule` (`create`) | `CareProjection` |
-| `WateringDue` | `plant_id`, `due_at` | `CareSchedule` (`mark_due`), `MissedCareSaga`'s scheduler | `MissedCareSaga`; Notifications (Phase 8) |
+| `WateringDue` | `plant_id`, `due_at` | `CareSchedule` (`mark_due`), `MissedCareSaga`'s scheduler | `MissedCareSaga`; `NotificationConsumer` |
 | `WateringCompleted` | `plant_id`, `completed_at`, `next_watering_at` | `CareSchedule` (`complete_watering`) | `CareProjection`; `MissedCareSaga`; `JournalEntryConsumer` |
-| `WateringRescheduled` | `plant_id`, `previous_next_watering_at`, `next_watering_at`, `reason` | `CareSchedule` (`reschedule`), `AdaptiveWateringSaga` | `CareProjection`; Notifications (Phase 8) |
-| `CareMissed` | `plant_id`, `next_watering_at` | `CareSchedule` (`mark_missed`), `MissedCareSaga` | `CareProjection`; Notifications (Phase 8) |
+| `WateringRescheduled` | `plant_id`, `previous_next_watering_at`, `next_watering_at`, `reason` | `CareSchedule` (`reschedule`), `AdaptiveWateringSaga` | `CareProjection`; `NotificationConsumer` |
+| `CareMissed` | `plant_id`, `next_watering_at` | `CareSchedule` (`mark_missed`), `MissedCareSaga` | `CareProjection`; `NotificationConsumer` |
 | `CareSkipped` | `plant_id`, `skipped_at`, `next_watering_at` | `CareSchedule` (`skip`) | `CareProjection` |
 
 ### Catalog
@@ -152,25 +152,26 @@ moment is the event's `completed_at`.
 
 | Event | Payload | Emitted by | Consumed by |
 |-------|---------|-----------|-------------|
-| `TelemetryReceived` | `sensor_id`, `plant_id`, `recorded_at`, `moisture`, `temperature`, `light` | the telemetry ingress (from `telemetry.raw`) | Care (`AdaptiveWateringSaga`); the readings table stores the same fact |
-| `SoilMoistureLow` | `sensor_id`, `plant_id`, `moisture`, `threshold` | `Sensor` (`record`) | Care, Notifications |
-| `SoilMoistureHigh` | `sensor_id`, `plant_id`, `moisture`, `threshold` | `Sensor` (`record`) | Care, Notifications |
-| `TemperatureAnomaly` | `sensor_id`, `plant_id`, `temperature`, `low_threshold`, `high_threshold` | `Sensor` (`record`) | Notifications, Care |
-| `SensorOffline` | `sensor_id`, `plant_id`, `last_seen_at`, `offline_for` | `Sensor` (`mark_offline`) | Notifications |
+| `TelemetryReceived` | `sensor_id`, `plant_id`, `recorded_at`, `moisture`, `temperature`, `light` | the telemetry ingress (from `telemetry.raw`, through `Sensor.record`) | Care (`AdaptiveWateringSaga`); the readings table stores the same fact |
+| `SoilMoistureLow` | `sensor_id`, `plant_id`, `moisture`, `threshold` | `Sensor` (`record`), called by the telemetry ingress | `NotificationConsumer` |
+| `SoilMoistureHigh` | `sensor_id`, `plant_id`, `moisture`, `threshold` | `Sensor` (`record`), called by the telemetry ingress | `AdaptiveWateringSaga` |
+| `TemperatureAnomaly` | `sensor_id`, `plant_id`, `temperature`, `low_threshold`, `high_threshold` | `Sensor` (`record`), called by the telemetry ingress | `NotificationConsumer` |
+| `SensorOffline` | `sensor_id`, `plant_id`, `last_seen_at`, `offline_for` | `Sensor` (`mark_offline`) | Notifications (no producer yet) |
 
 `TelemetryReceived` is the one catalogued event with no aggregate behind it: a reading is
-an append-only fact, so there is nothing to raise it. The ingress appends it to the
-outbox — explicitly, in the same transaction as the reading — rather than draining it
-from an aggregate. The three threshold events are still emitted only by the `Sensor`
-aggregate's `record`, so nothing produces `SoilMoistureLow`, `SoilMoistureHigh`,
-`TemperatureAnomaly` or `SensorOffline` yet: the detector that would call `record` is
-Phase 8's notifications work.
+an append-only fact, so nothing raises it for the aggregate to own — the ingress appends
+it to the outbox explicitly, in the same transaction as the reading. The three threshold
+events *are* raised by the aggregate: since Phase 8 the ingress calls
+`Sensor.record(reading)`, drains the events it raised and appends each of them to the
+same outbox rowset. The sensor's own state change (`last_seen_at`) is not persisted —
+that stays Phase 5's decision. `SensorOffline` still has no caller: it needs a silence
+timer, which no phase has built.
 
 ### Notifications
 
 | Event | Payload | Emitted by | Consumed by |
 |-------|---------|-----------|-------------|
-| `NotificationCreated` | `notification_id`, `household_id`, `notification_type`, `payload`, `created_at` | `Notification` (`create`), the sagas | `NotificationProjection`; HTTP long polling (Phase 8) |
+| `NotificationCreated` | `notification_id`, `household_id`, `notification_type`, `payload`, `created_at` | `Notification` (`create`), the notification producers | `NotificationProjection`; `NotificationPusher` (the Valkey nudge behind HTTP long polling) |
 | `NotificationRead` | `notification_id`, `household_id`, `read_at` | `Notification` (`mark_read`) | `NotificationProjection` |
 
 ### Saga / system
@@ -205,7 +206,7 @@ small and every event has a real cross-context consumer:
 ## Deferred to later phases
 
 - Windowed aggregation over the readings (a moving moisture average) and a telemetry
-  read model — Phase 8, as `docs/telemetry.md` describes.
+  read model — not scheduled; `docs/telemetry.md` describes what is here.
 - AsyncAPI document — Phase 10.
 
 ## Consumers
@@ -221,6 +222,12 @@ The write side's sagas listen with one group per saga and claim their deliveries
 compensations and how to inspect and recover it are in
 [`docs/sagas.md`](sagas.md); the decisions are in
 [ADR 0005](adr/0005-orchestration-vs-choreography.md).
+
+Two more write-side consumers joined in Phase 8 and follow the same discipline:
+`NotificationConsumer` (group `…-notifications`) turns care and telemetry facts into
+notifications, and `NotificationPusher` (group `…-notification-push`) turns
+`NotificationCreated` into the Valkey nudge a long poll waits on
+([`docs/notifications.md`](notifications.md)).
 
 The telemetry ingress is a consumer of a different kind: it reads `telemetry.raw`, not a
 topic from the table above, and its consumer group is

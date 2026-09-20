@@ -115,7 +115,8 @@ sequenceDiagram
     participant S as MissedCareScheduler
     participant K as care.events
     participant M as MissedCareSaga
-    participant W as write_care / write_notifications
+    participant N as NotificationConsumer
+    participant W as write_care
 
     S->>M: escalate_overdue(now)
     M->>W: schedule came due → open window (grace_deadline = due + 24h)
@@ -123,15 +124,22 @@ sequenceDiagram
     K->>M: WateringCompleted (inside the grace period)
     M->>W: window satisfied
     S->>M: escalate_overdue(now) — after the deadline
-    M->>W: schedule.mark_missed, Notification(care_missed), window missed
+    M->>W: schedule.mark_missed, window missed
     W-->>K: CareMissed
+    K->>N: CareMissed
+    N->>N: create Notification(care_missed)
 ```
 
 | Event | State change |
 |-------|--------------|
 | `WateringDue` | upsert `MissedCareWindow(pending, grace_deadline = due_at + 24h)` |
 | `WateringCompleted` | `pending → satisfied`, if the watering was inside the grace period |
-| scheduler tick | open windows for newly due schedules; for expired pending windows: `mark_missed` (shifts the schedule), create `care_missed`, `pending → missed` |
+| scheduler tick | open windows for newly due schedules; for expired pending windows: `mark_missed` (shifts the schedule), `pending → missed` |
+
+The `care_missed` reminder is `NotificationConsumer`'s ([`docs/notifications.md`](notifications.md)),
+not this saga's: the saga owns the schedule and the window, and the Notifications
+context owns what the household sees. It reacts to the `CareMissed` recorded on the
+tick.
 
 The anti-join in `list_due_without_pending_window` is what makes the tick
 idempotent: once a window is open, the schedule stops being "newly due", so a tick

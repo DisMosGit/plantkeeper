@@ -62,15 +62,24 @@ each command together with the events it produced into the outbox; `make grpc` i
 second, typed surface over the same application layer (see
 [`docs/grpc.md`](docs/grpc.md)); `make workers` runs the relay that publishes those
 events to Kafka, the write-side consumers (the telemetry ingress that turns
-`telemetry.raw` into readings and events, and the sagas), and their timers (the
-missed-care tick, the daily catalogue trigger, saga recovery and the readings
-table's partition window); `make admin` consumes them into the `read_analytics`
-schema and serves Django Admin over it. Nothing in either API process talks to the
-broker, so a slow Kafka cannot slow a request down, and nothing in the read side
-reads a write schema. See [`docs/events.md`](docs/events.md) for the topic, header
-and key contract, [`docs/telemetry.md`](docs/telemetry.md) for the raw stream and
-the readings table, [`docs/cqrs.md`](docs/cqrs.md) for the two sides, and
-[`docs/sagas.md`](docs/sagas.md) for the process managers.
+`telemetry.raw` into readings and events, the sagas, and the notification producers
+and pusher), and their timers (the missed-care tick, the daily catalogue trigger,
+saga recovery and the readings table's partition window); `make admin` consumes them
+into the `read_analytics` schema and serves Django Admin over it. Nothing in either
+API process talks to the broker, so a slow Kafka cannot slow a request down, and
+nothing in the read side reads a write schema. See [`docs/events.md`](docs/events.md)
+for the topic, header and key contract, [`docs/telemetry.md`](docs/telemetry.md) for
+the raw stream and the readings table, [`docs/cqrs.md`](docs/cqrs.md) for the two
+sides, [`docs/sagas.md`](docs/sagas.md) for the process managers, and
+[`docs/notifications.md`](docs/notifications.md) for HTTP long polling.
+
+A client receives its household's notifications by long-polling the write API; the
+worker's `NotificationPusher` wakes it through Valkey, and the endpoint always
+answers from the write tables:
+
+```bash
+curl -N "http://localhost:8000/api/v1/notifications/pending?household_id=<uuid>&timeout=30"
+```
 
 With `make grpc` running, the gRPC contract is discoverable through reflection:
 
@@ -111,6 +120,7 @@ Connection settings are documented in `.env.example`.
 - [`docs/iot-simulator.md`](docs/iot-simulator.md) — the simulator's physical model, scenarios and CLI
 - [`docs/cqrs.md`](docs/cqrs.md) — write schema, read schema, projections
 - [`docs/sagas.md`](docs/sagas.md) — the four process managers, their compensations and their timers
+- [`docs/notifications.md`](docs/notifications.md) — HTTP long polling, the Valkey presence channel and who creates which notification
 - [`docs/adr/`](docs/adr/) — architecture decision records
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — branches, commits, local workflow
 - [`CHANGELOG.md`](CHANGELOG.md) — release history

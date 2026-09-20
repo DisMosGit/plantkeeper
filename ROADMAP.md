@@ -852,30 +852,92 @@
 > **Цель:** клиент получает уведомления через long polling.
 > **Результат фазы:** `GET /notifications/pending?timeout=30` висит до появления уведомления.
 
+> **Статус:** ✅ выполнено — `NotificationChannel` (порт) и
+> `ValkeyNotificationChannel` публикуют и ждут сигнал в канале `household:{id}`;
+> `NotificationConsumer` превращает `WateringDue`, `WateringRescheduled`,
+> `CareMissed`, `SoilMoistureLow` и `TemperatureAnomaly` в уведомления, а
+> `NotificationPusher` будит ожидающий long poll; `GET
+> /api/v1/notifications/pending` ждёт до `timeout` и отвечает `204`, когда ничего
+> не появилось. Заодно `Sensor.record` вызывается ingress'ом, поэтому пороговые
+> события наконец публикуются. `make lint` чист, `make test` — 671 тест (unit +
+> integration + e2e на testcontainers), покрытие 96%. Коммиты созданы локально,
+> push в `origin` не выполнялся.
+
 ### 8.1. Valkey Pub/Sub канал
-- [ ] `NotificationChannel` (publish/subscribe через asyncio) · `M` 🧪
-- [ ] При создании `Notification` — publish в канал `household:{id}` · `M` 🧪
-- [ ] Коммит: `feat(infra): notification channel` · `M` 🧪
+- [x] `NotificationChannel` (publish/subscribe через asyncio) · `M` 🧪
+- [x] При создании `Notification` — publish в канал `household:{id}` · `M` 🧪
+- [x] Коммит: `feat(infra): notification channel` · `M` 🧪
 
 ### 8.2. Long polling endpoint
-- [ ] `GET /api/v1/notifications/pending?household_id=...&timeout=30` · `M` 🧪
-- [ ] Если есть непрочитанные — вернуть сразу · `S` 🧪
-- [ ] Если нет — subscribe Valkey, ждать с таймаутом · `M` 🧪
-- [ ] `POST /api/v1/notifications/{id}/ack` · `S` 🧪
-- [ ] Коммит: `feat(api): long polling notifications` · `M` 🧪
+- [x] `GET /api/v1/notifications/pending?household_id=...&timeout=30` · `M` 🧪
+- [x] Если есть непрочитанные — вернуть сразу · `S` 🧪
+- [x] Если нет — subscribe Valkey, ждать с таймаутом · `M` 🧪
+- [x] `POST /api/v1/notifications/{id}/ack` · `S` 🧪
+- [x] Коммит: `feat(api): long polling notifications` · `M` 🧪
 
 ### 8.3. Notification consumer
-- [ ] Слушает `WateringDue`, `CareMissed`, `WateringRescheduled`, `SoilMoistureLow` · `M` 🧪
-- [ ] Создаёт `Notification` + publish в Valkey · `M` 🧪
-- [ ] Idempotency по event_id · `S` 🧪
-- [ ] Коммит: `feat(workers): notification consumer` · `M` 🧪
+- [x] Слушает `WateringDue`, `CareMissed`, `WateringRescheduled`, `SoilMoistureLow` · `M` 🧪
+- [x] Создаёт `Notification` + publish в Valkey · `M` 🧪
+- [x] Idempotency по event_id · `S` 🧪
+- [x] Коммит: `feat(workers): notification consumer` · `M` 🧪
 
 ### 8.4. E2E-тест
-- [ ] Тест: событие → Notification в БД → long poll получает · `M` 🧪
-- [ ] Тест: таймаут → 204 No Content · `S` 🧪
-- [ ] Коммит: `test(e2e): long polling` · `M` 🧪
+- [x] Тест: событие → Notification в БД → long poll получает · `M` 🧪
+- [x] Тест: таймаут → 204 No Content · `S` 🧪
+- [x] Коммит: `test(e2e): long polling` · `M` 🧪
 
 **✅ Phase 8 завершена, когда:** клиент получает уведомления без email/Telegram.
+
+**Отклонения и уточнения:**
+- **Publish в Valkey делает отдельный `NotificationPusher`, а не создатель
+  уведомления.** Продюсеров уведомлений четыре (шаг онбординг-саги,
+  `AdaptiveWateringSaga`, `NotificationConsumer`), и публикация «при создании»
+  внутри их транзакций была бы и дублированием, и гонкой: ожидающий клиент
+  проснулся бы раньше коммита строки. Pusher — обычный consumer на
+  `notifications.events`: событие доходит до Kafka только через relay, то есть
+  строго после коммита, и один код обслуживает все четыре продюсера.
+- **Сигнал — это не данные.** В канал уходит только `household_id`; endpoint при
+  пробуждении и по истечении таймаута перечитывает свои write-таблицы. Поэтому
+  потерянный сигнал — это задержка на один интервал, а не потерянное уведомление,
+  а неработающий Valkey не роняет delivery: pusher логирует и коммитит claim.
+- **Endpoint отвечает `204`, а не `200 {"items": []}`.** Это осознанное изменение
+  контракта (8.4 требует `204` на таймаут): «ничего нет» теперь одно
+  представление, а не два. `timeout` по умолчанию `0` — обычный опрос отвечает
+  сразу, long polling клиент включает явно; максимум 60 секунд, потому что
+  запрос держит соединение с БД всё время ожидания.
+- **`NotificationConsumer` слушает ещё и `TemperatureAnomaly`.** Роадмап 8.3
+  перечисляет четыре события, но детектор (см. ниже) начинает публиковать и
+  температурную аномалию; оставить событие без потребителя — против принципа
+  «у каждого события есть consumer» из `docs/events.md`.
+- **`care_missed` переехал из `MissedCareSaga` в `NotificationConsumer`.** Иначе
+  тип получил бы двух писателей. Сага владеет расписанием и grace-окном, а
+  Notifications — тем, что видит household. Тест 4.4 обновлён: сага проверяется по
+  `CareMissed` в outbox, создание уведомления — тестом консьюмера.
+- **Пороговый детектор появился здесь же.** `TelemetryIngestConsumer` теперь
+  вызывает `Sensor.record(reading)` и складывает в outbox все события, которые
+  поднял агрегат (`TelemetryReceived` + пороговое). Это закрывает
+  `SoilMoistureLow`, `SoilMoistureHigh` и `TemperatureAnomaly`, которых не
+  производил никто с Phase 5; `SoilMoistureHigh` теперь доходит до
+  `AdaptiveWateringSaga` в проде. Строка сенсора по-прежнему не пишется:
+  `last_seen_at` меняется только в памяти — решение Phase 5 сохранено.
+  `SensorOffline` всё ещё без продюсера: ему нужен таймер тишины.
+- **`soil_moisture_low` и `temperature_anomaly` создаются не чаще одной
+  непрочитанной на растение.** Телеметрия идёт каждые 10 секунд; без этого
+  ограничения (тем же, что Phase 4 применяет к переливу) засуха превратилась бы в
+  поток уведомлений.
+- **Идемпотентность тройная**: ledger `(consumer_group, event_id)`, id уведомления
+  `uuid5` от события (восстановленная группа с потерянным ledger ничего не
+  создаёт) и guard на непрочитанные. Это тот же приём, что у
+  `JournalEntryConsumer`.
+- **`payload` добавлен в HTTP-ответ.** Без него long poll не мог сказать, к
+  какому растению относится `soil_moisture_low`.
+- **ADR не добавлялся**: `0007` зарезервирован Phase 10.2 под `why-python-cqrs`;
+  решения фазы записаны в `docs/notifications.md` и здесь (как в Phase 5 и 6).
+  Новых зависимостей нет: `valkey` уже объявлен в `packages/infrastructure`,
+  `testcontainers` уже умеет `ValkeyContainer`. Новых таблиц и миграций нет —
+  `write_notifications.notifications` создана ещё в Phase 2.
+- Нумерация ADR не менялась: `0007-why-python-cqrs`, `0008-outbox-pattern`,
+  `0009-event-sourcing-journal` (Phase 10).
 
 ---
 
