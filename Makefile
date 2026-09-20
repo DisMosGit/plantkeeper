@@ -1,14 +1,14 @@
 # PlantKeeper — developer entry points.
 #
-# Phase 2 fills in `migrate`, `api` and `workers`; `iot*` are explicit
-# placeholders that later phases fill in (see ROADMAP.md).
+# `migrate`, `api`, `admin`, `workers` and the `iot*` targets run the real
+# processes; `docs/iot-simulator.md` describes the simulator's flags.
 
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 COMPOSE := docker compose
 
-.PHONY: help dev up down clean lint format test test-unit test-domain test-integration test-e2e migrate api admin admin-static workers iot iot-drought
+.PHONY: help dev up down clean lint format test test-unit test-domain test-integration test-e2e migrate api admin admin-static workers iot iot-drought iot-dry-run
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -67,8 +67,11 @@ admin: admin-static ## Run the read side (projections + Django Admin) on :8001
 workers: ## Run the write-side workers: outbox relay, saga consumers and their timers
 	uv run python -m plantkeeper.workers
 
-iot: ## Run the IoT simulator, normal scenario (added in Phase 5)
-	@echo "IoT simulator lands in Phase 5: uv run python -m plantkeeper.iot_simulator --scenario normal"
+iot: ## Run the IoT simulator: 20 sensors, 10s interval, normal scenario
+	uv run python -m plantkeeper.iot_simulator --scenario normal --seed 42
 
-iot-drought: ## Run the IoT simulator, drought scenario (added in Phase 5)
-	@echo "IoT simulator lands in Phase 5: uv run python -m plantkeeper.iot_simulator --scenario drought"
+iot-drought: ## Run the IoT simulator in the drought scenario (trips AdaptiveWateringSaga)
+	uv run python -m plantkeeper.iot_simulator --scenario drought --seed 42
+
+iot-dry-run: ## Print the simulated stream to stdout, without Kafka
+	uv run python -m plantkeeper.iot_simulator --dry-run --scenario normal --seed 42
