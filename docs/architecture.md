@@ -65,6 +65,15 @@ Every write use case runs inside a Unit of Work, and the domain events it produc
 written to the `outbox` table **in the same transaction** as the aggregate. A relay
 publishes them to Kafka and marks them as sent.
 
+The arrow is split across two processes: `apps/api` stops at the commit, and the relay
+in `apps/workers` owns every produce. That way a slow or unreachable broker delays
+publication instead of an HTTP response, and the "aggregate and event are written
+together" promise stays a property of one transaction rather than a convention. The
+message contract — one topic per context, `event_name`/`event_id` headers, an
+aggregate-derived key, at-least-once delivery and the dead-letter path — is in
+[`docs/events.md`](events.md); the reasoning behind the outbox is in
+[ADR 0003](adr/0003-write-side-outbox.md).
+
 ## Read path
 
 `Kafka -> projection consumer -> read_analytics -> Django Admin / REST queries`

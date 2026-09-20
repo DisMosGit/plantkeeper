@@ -46,10 +46,19 @@ Requirements: Python 3.14+, [uv](https://docs.astral.sh/uv/), Docker with Compos
 ```bash
 uv sync --all-packages    # install the workspace
 make dev                  # start Kafka (KRaft), Postgres, Valkey, Redpanda Console
+make migrate              # apply the write schema (Alembic)
+make api                  # FastAPI on http://localhost:8000 (OpenAPI at /docs)
+make workers              # the outbox relay, which publishes to Kafka
 make lint                 # ruff + mypy + import-linter
 make test                 # pytest
 make clean                # stop infra and drop volumes
 ```
+
+The write side runs as two processes on purpose: `make api` answers HTTP and commits
+each command together with the events it produced into the outbox, and `make workers`
+runs the relay that publishes those events to Kafka. Nothing in the API process talks
+to the broker, so a slow Kafka cannot slow a request down. See
+[`docs/events.md`](docs/events.md) for the topic, header and key contract.
 
 Local infrastructure endpoints:
 
@@ -67,6 +76,7 @@ Connection settings are documented in `.env.example`.
 - [`ROADMAP.md`](ROADMAP.md) — phases, atomic tasks, Definition of Done
 - [`docs/architecture.md`](docs/architecture.md) — bounded contexts, layers, data flow
 - [`docs/domain.md`](docs/domain.md) — ubiquitous language, aggregates, invariants
+- [`docs/events.md`](docs/events.md) — event catalogue and its Kafka transport
 - [`docs/adr/`](docs/adr/) — architecture decision records
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — branches, commits, local workflow
 - [`CHANGELOG.md`](CHANGELOG.md) — release history
