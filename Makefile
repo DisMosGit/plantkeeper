@@ -1,15 +1,14 @@
 # PlantKeeper — developer entry points.
 #
-# Phase 0 ships infrastructure and tooling only: `dev` starts the compose stack,
-# `migrate` and `iot*` are explicit placeholders that later phases fill in
-# (see ROADMAP.md).
+# Phase 2 fills in `migrate`, `api` and `workers`; `iot*` are explicit
+# placeholders that later phases fill in (see ROADMAP.md).
 
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 COMPOSE := docker compose
 
-.PHONY: help dev up down clean lint format test test-unit test-domain test-integration test-e2e migrate iot iot-drought
+.PHONY: help dev up down clean lint format test test-unit test-domain test-integration test-e2e migrate api workers iot iot-drought
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -49,11 +48,17 @@ test-domain: ## Domain unit tests with the Phase 1 coverage floor (90%)
 test-integration: ## Integration tests (needs Docker)
 	uv run pytest tests/integration -m integration
 
-test-e2e: ## End-to-end tests (need `make dev`)
+test-e2e: ## End-to-end tests (start their own containers; needs Docker)
 	uv run pytest tests/e2e -m slow
 
 migrate: ## Apply all migrations (Alembic write schema; Django read models in Phase 3)
 	uv run alembic upgrade head
+
+api: ## Run the FastAPI write API on :8000
+	uv run uvicorn plantkeeper.api.main:app --host 0.0.0.0 --port 8000 --reload
+
+workers: ## Run the outbox relay worker (publishes the outbox to Kafka)
+	uv run python -m plantkeeper.workers
 
 iot: ## Run the IoT simulator, normal scenario (added in Phase 5)
 	@echo "IoT simulator lands in Phase 5: uv run python -m plantkeeper.iot_simulator --scenario normal"

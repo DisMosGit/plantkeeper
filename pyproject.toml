@@ -105,6 +105,13 @@ module = [
 ]
 disallow_subclassing_any = false
 
+[[tool.mypy.overrides]]
+# `aiokafka` ships no `py.typed` marker either. The services never import it —
+# FastStream does — so this only affects the tests that consume Kafka directly to
+# assert what the relay published.
+module = ["aiokafka.*"]
+ignore_missing_imports = true
+
 [tool.pydantic-mypy]
 init_typed = true
 init_forbid_extra = true
