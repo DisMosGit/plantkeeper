@@ -30,6 +30,10 @@ from plantkeeper.application.commands.garden import (
     RemovePlantCommand,
     RemovePlantHandler,
 )
+from plantkeeper.application.commands.journal import (
+    AddJournalEntryCommand,
+    AddJournalEntryHandler,
+)
 from plantkeeper.application.commands.notifications import (
     AcknowledgeNotificationCommand,
     AcknowledgeNotificationHandler,
@@ -54,6 +58,12 @@ from plantkeeper.application.queries.garden import (
     GetPlantQueryHandler,
     ListPlantsQuery,
     ListPlantsQueryHandler,
+)
+from plantkeeper.application.queries.journal import (
+    GetJournalAtDateHandler,
+    GetJournalAtDateQuery,
+    GetJournalTimelineHandler,
+    GetJournalTimelineQuery,
 )
 from plantkeeper.application.queries.notifications import (
     ListPendingNotificationsHandler,
@@ -93,5 +103,10 @@ def build_request_map() -> RequestMap:
     # Notifications
     request_map.bind(AcknowledgeNotificationCommand, AcknowledgeNotificationHandler)
     request_map.bind(ListPendingNotificationsQuery, ListPendingNotificationsHandler)
+
+    # Journal
+    request_map.bind(AddJournalEntryCommand, AddJournalEntryHandler)
+    request_map.bind(GetJournalTimelineQuery, GetJournalTimelineHandler)
+    request_map.bind(GetJournalAtDateQuery, GetJournalAtDateHandler)
 
     return request_map

@@ -12,7 +12,7 @@ JSON form is a plain UUID, which is what a client should see.
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from cqrs.response import PydanticResponse
 from pydantic import AwareDatetime, ConfigDict
@@ -24,11 +24,15 @@ from plantkeeper.domain.garden.household import Household
 from plantkeeper.domain.garden.plant import Plant
 from plantkeeper.domain.identifiers import (
     HouseholdId,
+    JournalEntryId,
     NotificationId,
     PlantId,
     SensorId,
     SpeciesId,
 )
+from plantkeeper.domain.journal.entry import JournalEntry
+from plantkeeper.domain.journal.state import JournalEntryState, JournalState
+from plantkeeper.domain.journal.values import JournalEntryType
 from plantkeeper.domain.notifications.notification import Notification
 from plantkeeper.domain.notifications.values import NotificationType
 from plantkeeper.domain.telemetry.sensor import Sensor
@@ -192,4 +196,68 @@ class NotificationView(PydanticResponse):
             notification_type=notification.notification_type,
             created_at=notification.created_at,
             read_at=notification.read_at,
+        )
+
+
+class JournalEntryView(PydanticResponse):
+    """One care record, as the API reports it.
+
+    ``occurred_at`` is when the care happened; when the entry was *recorded* is the
+    event store's own concern and is deliberately not on the wire.
+    """
+
+    model_config = _VIEW_CONFIG
+
+    entry_id: JournalEntryId
+    plant_id: PlantId
+    entry_type: JournalEntryType
+    occurred_at: AwareDatetime
+    note: str | None
+
+    @classmethod
+    def from_domain(cls, entry: JournalEntry) -> JournalEntryView:
+        """Project the aggregate."""
+        return cls(
+            entry_id=entry.id,
+            plant_id=entry.plant_id,
+            entry_type=entry.entry_type,
+            occurred_at=entry.occurred_at,
+            note=entry.note,
+        )
+
+    @classmethod
+    def from_state(cls, entry: JournalEntryState, *, plant_id: PlantId) -> JournalEntryView:
+        """Project a checkpointed entry, whose plant is the stream's, not its own."""
+        return cls(
+            entry_id=entry.entry_id,
+            plant_id=plant_id,
+            entry_type=entry.entry_type,
+            occurred_at=entry.occurred_at,
+            note=entry.note,
+        )
+
+
+class JournalStateView(PydanticResponse):
+    """The journal as it stood at one moment, plus the summary of what it holds."""
+
+    model_config = _VIEW_CONFIG
+
+    plant_id: PlantId
+    as_of: AwareDatetime
+    entry_count: int
+    counts_by_type: dict[JournalEntryType, int]
+    entries: list[JournalEntryView]
+
+    @classmethod
+    def from_state(cls, state: JournalState, *, as_of: datetime) -> JournalStateView:
+        """Project a replayed state, stamped with the cut-off that produced it."""
+        return cls(
+            plant_id=state.plant_id,
+            as_of=as_of,
+            entry_count=state.entry_count,
+            counts_by_type=state.counts_by_type(),
+            entries=[
+                JournalEntryView.from_state(entry, plant_id=state.plant_id)
+                for entry in state.entries
+            ],
         )

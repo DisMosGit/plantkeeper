@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from cqrs.requests.map import SagaMap
 
+from plantkeeper.application.journal.consumer import JournalEntryConsumer
 from plantkeeper.application.sagas.adaptive_watering import AdaptiveWateringSaga
 from plantkeeper.application.sagas.base import Saga
 from plantkeeper.application.sagas.consumer import Consumer
@@ -20,8 +21,14 @@ from plantkeeper.application.sagas.species_sync import SpeciesSyncSaga, SpeciesS
 CONSUMER_TYPES: tuple[type[Consumer], ...] = (
     AdaptiveWateringSaga,
     MissedCareSaga,
+    JournalEntryConsumer,
 )
-"""Choreography consumers: they react on their own, with no process manager."""
+"""Choreography consumers: they react on their own, with no process manager.
+
+The journal recorder is the one that is not a saga: it turns ``WateringCompleted``
+into a journal entry, and like the others it owns a consumer group and a ledger
+domain of its own.
+"""
 
 TRIGGER_TYPES: tuple[type[Consumer], ...] = (
     OnboardPlantTrigger,

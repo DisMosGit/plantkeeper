@@ -19,6 +19,7 @@ from cqrs.saga.storage.protocol import ISagaStorage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from plantkeeper.application.journal.consumer import JournalEntryConsumer
 from plantkeeper.application.ports.sagas import MissedCareState, MissedCareWindow
 from plantkeeper.application.sagas.adaptive_watering import AdaptiveWateringSaga
 from plantkeeper.application.sagas.missed_care import GRACE_PERIOD, MissedCareSaga
@@ -27,6 +28,8 @@ from plantkeeper.domain.care.schedule import CareSchedule
 from plantkeeper.domain.garden.household import Household
 from plantkeeper.domain.garden.plant import Plant
 from plantkeeper.domain.identifiers import HouseholdId, PlantId, SensorId, SpeciesId
+from plantkeeper.domain.journal.events import JournalEntryAdded
+from plantkeeper.domain.journal.values import JournalEntryType
 from plantkeeper.domain.notifications.values import NotificationType
 from plantkeeper.domain.telemetry.events import SoilMoistureHigh, TelemetryReceived
 from plantkeeper.domain.telemetry.sensor import MOISTURE_LOW_THRESHOLD
@@ -394,3 +397,93 @@ async def test_a_watering_after_the_deadline_does_not_erase_the_miss(
     assert window is not None
     assert window.state is MissedCareState.MISSED
     assert "CareMissed" in await outbox_event_names(session_factory)
+
+
+# --- JournalEntryConsumer -----------------------------------------------------
+
+
+def a_watering_completed(plant_id: PlantId) -> WateringCompleted:
+    """One completion the journal should record."""
+    return WateringCompleted(
+        plant_id=plant_id,
+        completed_at=NOW,
+        next_watering_at=NOW + WEEK,
+        occurred_at=NOW,
+    )
+
+
+async def test_a_completed_watering_is_journalled_once(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    _, plant_id = await seed_plant_with_schedule(session_factory, next_watering_at=NOW + WEEK)
+    storage = SqlAlchemySagaStorage(session_factory)
+    event = a_watering_completed(plant_id)
+
+    async with session_factory() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        consumer = JournalEntryConsumer(uow, FakeClock(NOW))
+        assert await consumer.consume(event, consumer_group=GROUP, dispatcher=a_dispatcher(storage))
+        # The ledger stops a redelivery of the same event.
+        assert not await consumer.consume(
+            event, consumer_group=GROUP, dispatcher=a_dispatcher(storage)
+        )
+
+    async with session_factory() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        stored = await uow.event_store.load_stream(plant_id)
+        mirror = await uow.journal_entries.list_by_plant(plant_id)
+
+    assert [row.version for row in stored] == [1]
+    assert isinstance(stored[0].event, JournalEntryAdded)
+    assert stored[0].event.entry_occurred_at == NOW
+    assert [entry.entry_type for entry in mirror] == [JournalEntryType.WATERING]
+    assert "JournalEntryAdded" in await outbox_event_names(session_factory)
+
+
+async def test_a_rebuilt_consumer_group_does_not_journal_the_watering_again(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A reset offset plus a lost ledger is the case the derived entry id covers."""
+    _, plant_id = await seed_plant_with_schedule(session_factory, next_watering_at=NOW + WEEK)
+    storage = SqlAlchemySagaStorage(session_factory)
+    event = a_watering_completed(plant_id)
+
+    async with session_factory() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        consumer = JournalEntryConsumer(uow, FakeClock(NOW))
+        assert await consumer.consume(event, consumer_group=GROUP, dispatcher=a_dispatcher(storage))
+
+    async with session_factory() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        rebuilt = JournalEntryConsumer(uow, FakeClock(NOW))
+        assert await rebuilt.consume(
+            event, consumer_group=f"{GROUP}-rebuilt", dispatcher=a_dispatcher(storage)
+        )
+
+    async with session_factory() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        stored = await uow.event_store.load_stream(plant_id)
+        mirror = await uow.journal_entries.list_by_plant(plant_id)
+
+    assert [row.version for row in stored] == [1]
+    assert len(mirror) == 1
+
+
+async def test_a_watering_for_an_unknown_plant_is_not_journalled(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    storage = SqlAlchemySagaStorage(session_factory)
+
+    async with session_factory() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        consumer = JournalEntryConsumer(uow, FakeClock(NOW))
+        assert await consumer.consume(
+            a_watering_completed(PlantId.new()),
+            consumer_group=GROUP,
+            dispatcher=a_dispatcher(storage),
+        )
+
+    async with session_factory() as session:
+        stored = await SqlAlchemyUnitOfWork(session).event_store.load_all()
+
+    assert stored == []

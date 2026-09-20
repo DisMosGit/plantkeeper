@@ -35,11 +35,17 @@ from plantkeeper.application.commands.garden import (
     MovePlantHandler,
     RemovePlantHandler,
 )
+from plantkeeper.application.commands.journal import AddJournalEntryHandler
 from plantkeeper.application.commands.notifications import AcknowledgeNotificationHandler
 from plantkeeper.application.commands.telemetry import AddSensorHandler, RemoveSensorHandler
+from plantkeeper.application.journal.consumer import JournalEntryConsumer
 from plantkeeper.application.ports.catalog import SpeciesCache, SpeciesCatalog, SpeciesSource
 from plantkeeper.application.ports.clock import Clock
 from plantkeeper.application.ports.event_publisher import EventPublisher
+from plantkeeper.application.ports.event_store import (
+    EventStoreRepository,
+    JournalSnapshotRepository,
+)
 from plantkeeper.application.ports.repositories import (
     CareScheduleRepository,
     HouseholdRepository,
@@ -57,6 +63,10 @@ from plantkeeper.application.queries.garden import (
     GetHouseholdQueryHandler,
     GetPlantQueryHandler,
     ListPlantsQueryHandler,
+)
+from plantkeeper.application.queries.journal import (
+    GetJournalAtDateHandler,
+    GetJournalTimelineHandler,
 )
 from plantkeeper.application.queries.notifications import ListPendingNotificationsHandler
 from plantkeeper.application.queries.telemetry import ListSensorsQueryHandler
@@ -96,6 +106,10 @@ from plantkeeper.infrastructure.persistence.repositories.care import (
 from plantkeeper.infrastructure.persistence.repositories.catalog import (
     SqlAlchemySpeciesRepository,
 )
+from plantkeeper.infrastructure.persistence.repositories.event_store import (
+    SqlAlchemyEventStoreRepository,
+    SqlAlchemyJournalSnapshotRepository,
+)
 from plantkeeper.infrastructure.persistence.repositories.garden import (
     SqlAlchemyHouseholdRepository,
     SqlAlchemyPlantRepository,
@@ -126,6 +140,7 @@ HANDLER_TYPES = (
     AddSensorHandler,
     RemoveSensorHandler,
     AcknowledgeNotificationHandler,
+    AddJournalEntryHandler,
     # Queries
     GetPlantQueryHandler,
     ListPlantsQueryHandler,
@@ -135,6 +150,8 @@ HANDLER_TYPES = (
     GetSpeciesQueryHandler,
     ListSensorsQueryHandler,
     ListPendingNotificationsHandler,
+    GetJournalTimelineHandler,
+    GetJournalAtDateHandler,
 )
 """Every request handler, in the order the registry binds them."""
 
@@ -252,6 +269,20 @@ class RepositoryProvider(Provider):
         return SqlAlchemyJournalEntryRepository(session, tracker)
 
     @provide(scope=Scope.REQUEST)
+    def event_store(self, session: AsyncSession) -> EventStoreRepository:
+        """Expose the journal's event stream of the request's session.
+
+        No tracker: an appended event is published explicitly by the code that
+        appends it, because the store is not an aggregate repository.
+        """
+        return SqlAlchemyEventStoreRepository(session)
+
+    @provide(scope=Scope.REQUEST)
+    def journal_snapshots(self, session: AsyncSession) -> JournalSnapshotRepository:
+        """Expose the journal's checkpoints of the request's session."""
+        return SqlAlchemyJournalSnapshotRepository(session)
+
+    @provide(scope=Scope.REQUEST)
     def notifications(
         self, session: AsyncSession, tracker: AggregateTracker
     ) -> NotificationRepository:
@@ -310,6 +341,7 @@ SAGA_COMPONENT_TYPES = (
     # Choreography
     AdaptiveWateringSaga,
     MissedCareSaga,
+    JournalEntryConsumer,
     # Ingress
     TelemetryIngestConsumer,
     # Triggers

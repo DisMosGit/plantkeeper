@@ -8,33 +8,24 @@ explains why:
   (``OnboardPlantSaga``, ``SpeciesSyncSaga``).
 * :class:`~plantkeeper.application.sagas.consumer.Consumer` — choreography. Each
   event carries its own reaction and there is no central state
-  (``AdaptiveWateringSaga``, ``MissedCareSaga``).
+  (``AdaptiveWateringSaga``, ``MissedCareSaga``, ``JournalEntryConsumer``).
 
 Both are started from Kafka by ``apps/workers``, and both are idempotent on
 ``(consumer_group, event_id)``.
+
+The registry (:mod:`plantkeeper.application.sagas.registry`) is deliberately *not*
+re-exported here. It imports every consumer, and the journal's consumer imports
+this package for its base class — re-exporting it would close that cycle, so the
+worker and the tests import the registry by its own module name.
 """
 
 from __future__ import annotations
 
 from plantkeeper.application.sagas.base import Saga
 from plantkeeper.application.sagas.consumer import Consumer, consume_once
-from plantkeeper.application.sagas.registry import (
-    CONSUMER_TYPES,
-    SAGA_TYPES,
-    TRIGGER_TYPES,
-    WORKER_CONSUMER_TYPES,
-    build_saga_map,
-    saga_type_named,
-)
 
 __all__ = (
-    "CONSUMER_TYPES",
-    "SAGA_TYPES",
-    "TRIGGER_TYPES",
-    "WORKER_CONSUMER_TYPES",
     "Consumer",
     "Saga",
-    "build_saga_map",
     "consume_once",
-    "saga_type_named",
 )
