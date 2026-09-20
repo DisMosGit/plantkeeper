@@ -74,7 +74,9 @@ importing the owning context's code.
   but moving a concept between contexts requires a new ADR, because the event
   catalogue and the read models change with it.
 - **Follow-up:** Phases 2–9 each realise one context's infrastructure and consumers;
-  `docs/architecture.md` is updated with the runtime view in Phase 10.
+  `docs/architecture.md` carries the runtime view, and the generated
+  [`docs/diagrams/event-flow.md`](../diagrams/event-flow.md) the complete event
+  topology.
 
 ## References
 

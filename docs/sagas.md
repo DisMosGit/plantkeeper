@@ -1,8 +1,9 @@
 # Sagas
 
-> **Status:** Phase 4. Four process managers run in `apps/workers`
-> (`make workers`), alongside the outbox relay. The architectural decision behind
-> their two shapes is [ADR 0005](adr/0005-orchestration-vs-choreography.md).
+> **Status:** the four process managers run in `apps/workers` (`make workers`),
+> alongside the outbox relay. The architectural decision behind their two shapes is
+> [ADR 0005](adr/0005-orchestration-vs-choreography.md); their real step sequences are
+> generated into [`docs/diagrams/sagas.md`](diagrams/sagas.md) by `make diagrams`.
 
 A *saga* here is a long-running reaction to domain events: it spans several
 transactions, several aggregates, and sometimes a wall-clock delay. This document
@@ -238,8 +239,12 @@ Relevant settings (see `.env.example`):
 - A crash between a step's commit and the saga-state checkpoint is resolved by
   recovery re-running from `saga_log`; the log entry is written before the next
   step starts, and steps are written to be idempotent.
-- `AdaptiveWateringSaga` and `MissedCareSaga` only react to events that Phase 4
-  has no producer for yet: the telemetry consumer is Phase 5, so their
-  integration tests publish `TelemetryReceived` directly.
-- The upstream catalogue source and the cache adapter are placeholders until
-  Phase 9; `POST /api/v1/catalog/sync` completes with zero updates today.
+- `SpeciesSyncSaga` never deletes a local species: Trefle has no "species gone"
+  signal, so local entries outlive an upstream removal (`docs/catalog.md`).
+- The compensation of a catalogue creation deletes the write-side row, but the
+  `SpeciesAdded` it published cannot be recalled — the same case as
+  `PlantOnboarded` above.
+- `SagaStateRepository` has no production caller: recovery goes through the
+  library's `ISagaStorage.get_sagas_for_recovery`, which answers ids only. The
+  repository is a reading facade over the same table and is covered by an
+  integration test.

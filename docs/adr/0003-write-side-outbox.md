@@ -106,7 +106,11 @@ model is declared on its own `registry().generate_base()`, so the project would 
 second declarative base beside `Base`. What `python-cqrs` genuinely provides —
 `PydanticRequest` / `PydanticResponse`, `RequestHandler`, `RequestMap`,
 `RequestMediator` and the Dishka container — is used as-is, and
-[ADR 0007](0007-why-python-cqrs.md) (Phase 10) records that split.
+[ADR 0007](0007-why-python-cqrs.md) records that split. The consuming half of the same
+pattern — the per-consumer ledger, the derived identifiers and the offset policy — is
+[ADR 0008](0008-outbox-pattern.md), which complements this one rather than replacing
+it: this ADR decides where the producing table comes from, 0008 decides what every
+consumer owes it.
 
 ## Consequences
 
@@ -133,9 +137,10 @@ second declarative base beside `Base`. What `python-cqrs` genuinely provides —
 - **Follow-up:** `write_shared.idempotency_keys` grows without bound until Phase
   8 adds expiry; `POST /api/v1/households` exists because `POST /api/v1/plants`
   needs a household and Identity has no ORM model yet.
-- **Superseded-in-part:** the Phase 10 roadmap lists a planned ADR
-  `outbox-pattern`; it now has to either reference this one or replace it when
-  the pattern is documented for the whole platform.
+- **Complemented:** the roadmap's planned ADR `outbox-pattern` is
+  [ADR 0008](0008-outbox-pattern.md), which documents the consuming half — the
+  ledger, the derived identifiers and the offset policy — and references this ADR for
+  the table and the relay instead of restating them.
 
 ## References
 

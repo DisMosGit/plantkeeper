@@ -1,9 +1,9 @@
 # Event sourcing: the Journal
 
-> **Status:** Phase 6. The journal is append-only, replayable from its own stream, and
-> can answer "what did it look like on any date". The roadmap reserves a dedicated ADR
-> for this phase (`0009-event-sourcing-journal.md`, Phase 10); the decisions taken here
-> are recorded below and in the Phase 6 close-out in `ROADMAP.md`.
+> **Status:** implemented. The journal is append-only, replayable from its own stream,
+> and can answer "what did it look like on any date". The architectural decision is
+> [ADR 0009](adr/0009-event-sourcing-journal.md); this document is the operational
+> detail behind it, and the phase's close-out is in `ROADMAP.md`.
 
 The Journal is the project's **only** event-sourced aggregate. Every other context
 stores current state and publishes facts as a side effect; the journal stores the
