@@ -82,3 +82,21 @@ async def read_side_settings(
         monkeypatch, database=database, bootstrap_servers=kafka_bootstrap_servers
     )
     return settings.model_copy(update={"read_side_consumer_group_prefix": f"test-read-{uuid4()}"})
+
+
+@pytest.fixture
+async def worker_settings(
+    database: str,
+    kafka_bootstrap_servers: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Settings:
+    """Settings for the write-side workers, on consumer groups of their own.
+
+    Fresh groups for the same reason as the read side: the shared broker may
+    already hold offsets for the default prefix, and a group that resumed from
+    them would never see what this test publishes.
+    """
+    settings = point_environment_at(
+        monkeypatch, database=database, bootstrap_servers=kafka_bootstrap_servers
+    )
+    return settings.model_copy(update={"worker_consumer_group_prefix": f"test-worker-{uuid4()}"})

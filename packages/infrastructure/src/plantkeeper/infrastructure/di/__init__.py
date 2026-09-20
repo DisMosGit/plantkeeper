@@ -8,7 +8,9 @@ from plantkeeper.infrastructure.di.providers import (
     DatabaseProvider,
     MessagingProvider,
     RepositoryProvider,
+    SagaProvider,
     build_handler_provider,
+    build_saga_component_provider,
     worker_providers,
 )
 
@@ -18,6 +20,8 @@ __all__ = (
     "DishkaCQRSContainer",
     "MessagingProvider",
     "RepositoryProvider",
+    "SagaProvider",
     "build_handler_provider",
+    "build_saga_component_provider",
     "worker_providers",
 )

@@ -16,7 +16,8 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-from cqrs.requests.map import RequestMap
+from cqrs.requests.map import RequestMap, SagaMap
+from cqrs.saga.storage.protocol import ISagaStorage
 from dishka import Provider, Scope, provide
 from faststream.kafka import KafkaBroker
 from sqlalchemy.ext.asyncio import (
@@ -36,6 +37,7 @@ from plantkeeper.application.commands.garden import (
 )
 from plantkeeper.application.commands.notifications import AcknowledgeNotificationHandler
 from plantkeeper.application.commands.telemetry import AddSensorHandler, RemoveSensorHandler
+from plantkeeper.application.ports.catalog import SpeciesCache, SpeciesCatalog, SpeciesSource
 from plantkeeper.application.ports.clock import Clock
 from plantkeeper.application.ports.event_publisher import EventPublisher
 from plantkeeper.application.ports.repositories import (
@@ -58,6 +60,29 @@ from plantkeeper.application.queries.garden import (
 from plantkeeper.application.queries.notifications import ListPendingNotificationsHandler
 from plantkeeper.application.queries.telemetry import ListSensorsQueryHandler
 from plantkeeper.application.registry import build_request_map
+from plantkeeper.application.sagas.adapters import (
+    OutboxSpeciesCache,
+    RepositorySpeciesCatalog,
+    UnconfiguredSpeciesSource,
+)
+from plantkeeper.application.sagas.adaptive_watering import AdaptiveWateringSaga
+from plantkeeper.application.sagas.missed_care import MissedCareSaga
+from plantkeeper.application.sagas.onboard import (
+    CreateCareScheduleStep,
+    CreateOnboardingNotificationStep,
+    OnboardPlantSaga,
+    OnboardPlantTrigger,
+    PublishPlantOnboardedStep,
+    ResolveSpeciesStep,
+)
+from plantkeeper.application.sagas.registry import build_saga_map
+from plantkeeper.application.sagas.species_sync import (
+    ApplySpeciesUpdatesStep,
+    FetchSpeciesStep,
+    InvalidateSpeciesCacheStep,
+    SpeciesSyncSaga,
+    SpeciesSyncTrigger,
+)
 from plantkeeper.infrastructure.clock import SystemClock
 from plantkeeper.infrastructure.config import Settings
 from plantkeeper.infrastructure.messaging.broker import build_broker
@@ -82,6 +107,7 @@ from plantkeeper.infrastructure.persistence.repositories.notifications import (
 from plantkeeper.infrastructure.persistence.repositories.telemetry import (
     SqlAlchemySensorRepository,
 )
+from plantkeeper.infrastructure.persistence.saga_storage import SqlAlchemySagaStorage
 from plantkeeper.infrastructure.persistence.tracking import AggregateTracker
 from plantkeeper.infrastructure.persistence.uow import SqlAlchemyUnitOfWork
 
@@ -258,14 +284,90 @@ def build_handler_provider() -> Provider:
     return provider
 
 
+SAGA_COMPONENT_TYPES = (
+    # Orchestration
+    OnboardPlantSaga,
+    ResolveSpeciesStep,
+    CreateCareScheduleStep,
+    CreateOnboardingNotificationStep,
+    PublishPlantOnboardedStep,
+    SpeciesSyncSaga,
+    FetchSpeciesStep,
+    ApplySpeciesUpdatesStep,
+    InvalidateSpeciesCacheStep,
+    # Choreography
+    AdaptiveWateringSaga,
+    MissedCareSaga,
+    # Triggers
+    OnboardPlantTrigger,
+    SpeciesSyncTrigger,
+)
+"""Every saga, step handler and consumer, in the order the registry lists them."""
+
+
+class SagaProvider(Provider):
+    """The write-side consumers' dependencies.
+
+    The division follows the lifetimes: the saga storage, the saga map and the
+    upstream catalogue source live for the process; the sagas, their steps and the
+    consumers (and the adapters that read through the request's session) live for
+    one delivery.
+    """
+
+    @provide(scope=Scope.APP)
+    def saga_storage(self, session_factory: async_sessionmaker[AsyncSession]) -> ISagaStorage:
+        """Own the ``write_shared`` saga tables through the app's session factory."""
+        return SqlAlchemySagaStorage(session_factory)
+
+    @provide(scope=Scope.APP)
+    def saga_map(self) -> SagaMap:
+        """Bind each saga context type to its saga, once per process."""
+        return build_saga_map()
+
+    @provide(scope=Scope.APP)
+    def species_source(self) -> SpeciesSource:
+        """Answer the synchronisation saga; the Trefle adapter arrives in Phase 9."""
+        return UnconfiguredSpeciesSource()
+
+    @provide(scope=Scope.REQUEST)
+    def species_catalog(self, species: SpeciesRepository) -> SpeciesCatalog:
+        """Read the local catalogue through the onboarding saga's ACL."""
+        return RepositorySpeciesCatalog(species)
+
+    @provide(scope=Scope.REQUEST)
+    def species_cache(self, unit_of_work: UnitOfWork) -> SpeciesCache:
+        """Announce cache staleness through the request's outbox."""
+        return OutboxSpeciesCache(unit_of_work)
+
+
+def build_saga_component_provider() -> Provider:
+    """Register every saga, step handler and consumer at ``REQUEST`` scope.
+
+    Built imperatively for the same reason as the handlers: one list, which a test
+    can compare with the registry so a component added to the code but not to the
+    worker's container cannot go unnoticed.
+    """
+    provider = Provider(scope=Scope.REQUEST)
+    for component in SAGA_COMPONENT_TYPES:
+        provider.provide(component, scope=Scope.REQUEST)
+    return provider
+
+
 def worker_providers() -> list[Provider]:
-    """Return the providers the outbox relay worker needs."""
+    """Return the providers the outbox relay worker needs.
+
+    The saga providers are here and not in ``api_providers``: the API writes to the
+    outbox and never consumes, so building a saga storage in it would only add a
+    second writer to the process that must not have one.
+    """
     return [
         AppProvider(),
         DatabaseProvider(),
         RepositoryProvider(),
         MessagingProvider(),
+        SagaProvider(),
         build_handler_provider(),
+        build_saga_component_provider(),
     ]
 
 

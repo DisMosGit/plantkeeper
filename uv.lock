@@ -1193,6 +1193,7 @@ dependencies = [
     { name = "faststream", extra = ["kafka"] },
     { name = "plantkeeper-application" },
     { name = "plantkeeper-infrastructure" },
+    { name = "python-cqrs" },
 ]
 
 [package.metadata]
@@ -1201,6 +1202,7 @@ requires-dist = [
     { name = "faststream", extras = ["kafka"], specifier = ">=0.7.6" },
     { name = "plantkeeper-application", editable = "packages/application" },
     { name = "plantkeeper-infrastructure", editable = "packages/infrastructure" },
+    { name = "python-cqrs", specifier = ">=4.13" },
 ]
 
 [[package]]

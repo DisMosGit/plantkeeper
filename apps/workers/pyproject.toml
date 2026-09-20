@@ -1,13 +1,14 @@
 [project]
 name = "plantkeeper-workers"
 version = "0.1.0"
-description = "FastStream consumers: projections, outbox relay, sagas."
+description = "FastStream consumers: the outbox relay, the saga consumers and their timers."
 requires-python = ">=3.14"
 dependencies = [
     "plantkeeper-application",
     "plantkeeper-infrastructure",
     "dishka>=1.10",
     "faststream[kafka]>=0.7.6",
+    "python-cqrs>=4.13",
 ]
 
 [build-system]

@@ -48,6 +48,25 @@ class Settings(BaseSettings):
     # of an earlier run.
     read_side_consumer_group_prefix: str = "plantkeeper-read"
 
+    # --- Write side consumers (sagas) -----------------------------------------
+    # One group per saga (``<prefix>-onboard-plant``, …), for the same reason as
+    # the read side: the ledger and the offsets are per consumer.
+    worker_consumer_group_prefix: str = "plantkeeper-worker"
+    missed_care_check_interval_seconds: float = 60.0
+    """How often the missed-care scheduler looks for due and overdue schedules."""
+
+    species_sync_interval_seconds: float = 86400.0
+    """How often the daily catalogue synchronisation trigger is published."""
+
+    saga_recovery_interval_seconds: float = 30.0
+    """How often unfinished sagas are looked for after a crash."""
+
+    saga_recovery_max_attempts: int = 5
+    """How often one saga may fail recovery before it is left for an operator."""
+
+    saga_recovery_stale_after_seconds: float = 60.0
+    """Only sagas untouched for this long are recovered, never one mid-step."""
+
     @property
     def postgres_dsn(self) -> str:
         """The SQLAlchemy URL of the write database.

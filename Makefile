@@ -64,7 +64,7 @@ admin-static: ## Collect the Django Admin's static files for the Starlette mount
 admin: admin-static ## Run the read side (projections + Django Admin) on :8001
 	uv run uvicorn --factory plantkeeper.admin.asgi:create_admin_application --host 0.0.0.0 --port 8001 --reload
 
-workers: ## Run the outbox relay worker (publishes the outbox to Kafka)
+workers: ## Run the write-side workers: outbox relay, saga consumers and their timers
 	uv run python -m plantkeeper.workers
 
 iot: ## Run the IoT simulator, normal scenario (added in Phase 5)
