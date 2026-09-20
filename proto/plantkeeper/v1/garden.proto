@@ -1,0 +1,40 @@
+// GardenService: the household's plants.
+syntax = "proto3";
+
+package plantkeeper.v1;
+
+import "google/protobuf/timestamp.proto";
+import "plantkeeper/v1/common.proto";
+
+message Plant {
+  PlantId plant_id = 1;
+  HouseholdId household_id = 2;
+  SpeciesId species_id = 3;
+  string name = 4;
+  string location = 5;
+  google.protobuf.Timestamp added_at = 6;
+  optional google.protobuf.Timestamp last_watered_at = 7;
+  bool removed = 8;
+}
+
+message ListPlantsRequest {
+  HouseholdId household_id = 1;
+  bool include_removed = 2;
+}
+
+message ListPlantsResponse {
+  repeated Plant items = 1;
+}
+
+message GetPlantRequest {
+  PlantId plant_id = 1;
+}
+
+message GetPlantResponse {
+  Plant plant = 1;
+}
+
+service GardenService {
+  rpc ListPlants(ListPlantsRequest) returns (ListPlantsResponse);
+  rpc GetPlant(GetPlantRequest) returns (GetPlantResponse);
+}

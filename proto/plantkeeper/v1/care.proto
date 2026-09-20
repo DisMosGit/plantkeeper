@@ -1,0 +1,39 @@
+// CareService: what is due today, and completing a watering.
+syntax = "proto3";
+
+package plantkeeper.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "plantkeeper/v1/common.proto";
+
+message CareSchedule {
+  PlantId plant_id = 1;
+  google.protobuf.Duration watering_interval = 2;
+  google.protobuf.Timestamp next_watering_at = 3;
+  int64 version = 4;
+}
+
+message GetTodayCareRequest {
+  HouseholdId household_id = 1;
+}
+
+message GetTodayCareResponse {
+  repeated CareSchedule items = 1;
+}
+
+message CompleteWateringRequest {
+  PlantId plant_id = 1;
+  // Omitted means "use the schedule's current version"; supplying the version the
+  // client read turns a concurrent watering into an explicit conflict.
+  optional int64 expected_version = 2;
+}
+
+message CompleteWateringResponse {
+  CareSchedule schedule = 1;
+}
+
+service CareService {
+  rpc GetTodayCare(GetTodayCareRequest) returns (GetTodayCareResponse);
+  rpc CompleteWatering(CompleteWateringRequest) returns (CompleteWateringResponse);
+}

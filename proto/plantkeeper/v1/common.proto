@@ -1,0 +1,37 @@
+// Shared wire types of the PlantKeeper v1 gRPC API.
+//
+// Identifiers are wrapper messages rather than bare strings so that a
+// ``PlantId`` cannot be passed where a ``SensorId`` is expected, mirroring the
+// typed identifiers of the domain layer.
+syntax = "proto3";
+
+package plantkeeper.v1;
+
+import "google/protobuf/timestamp.proto";
+
+message PlantId {
+  string value = 1;
+}
+
+message HouseholdId {
+  string value = 1;
+}
+
+message SpeciesId {
+  string value = 1;
+}
+
+message SensorId {
+  string value = 1;
+}
+
+// One raw telemetry measurement, as the IoT simulator publishes it to
+// ``telemetry.raw``. Phase 7 has no RPC that returns it; it is the shared shape
+// a later telemetry surface will use.
+message SensorReading {
+  SensorId sensor_id = 1;
+  google.protobuf.Timestamp recorded_at = 2;
+  double moisture = 3;
+  double temperature = 4;
+  double light = 5;
+}
