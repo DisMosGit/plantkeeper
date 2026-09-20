@@ -30,7 +30,7 @@ from plantkeeper.domain.garden.events import (
     PlantOnboarded,
     PlantRemoved,
 )
-from plantkeeper.domain.identifiers import PlantId, SensorId
+from plantkeeper.domain.identifiers import HouseholdId, PlantId, SensorId, SpeciesId
 from plantkeeper.domain.journal.events import JournalEntryAdded
 from plantkeeper.domain.notifications.events import NotificationCreated, NotificationRead
 from plantkeeper.domain.telemetry.events import (
@@ -40,7 +40,7 @@ from plantkeeper.domain.telemetry.events import (
     TelemetryReceived,
     TemperatureAnomaly,
 )
-from plantkeeper.domain.values import LightLevel, Moisture, Temperature
+from plantkeeper.domain.values import LightLevel, Location, Moisture, Temperature
 
 EVENT_TYPES: list[type[DomainEvent]] = [
     PlantAdded,
@@ -95,3 +95,27 @@ def test_a_representative_event_survives_a_json_round_trip() -> None:
     )
 
     assert TelemetryReceived.model_validate_json(event.model_dump_json()) == event
+
+
+def test_value_objects_reach_the_wire_as_scalars() -> None:
+    """The published JSON is flat: a value object is its scalar, not its wrapper.
+
+    Consumers in any language read ``payload["location"]``; making them unwrap
+    ``{"value": ...}`` would put a domain modelling detail into the integration
+    contract. ``docs/events.md`` documents this shape.
+    """
+    added_at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    event = PlantAdded(
+        plant_id=PlantId.new(),
+        household_id=HouseholdId.new(),
+        species_id=SpeciesId.new(),
+        name="Fern",
+        location=Location(value="Shelf"),
+        added_at=added_at,
+    )
+
+    payload = event.model_dump(mode="json")
+
+    assert payload["location"] == "Shelf"
+    assert payload["plant_id"] == str(event.plant_id)
+    assert payload["added_at"] == added_at.isoformat().replace("+00:00", "Z")

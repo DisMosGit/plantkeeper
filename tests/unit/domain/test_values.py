@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from plantkeeper.domain.identifiers import SensorId
 from plantkeeper.domain.values import (
@@ -193,3 +193,49 @@ def test_sensor_reading_is_frozen() -> None:
 
     with pytest.raises(ValidationError):
         reading.__setattr__("moisture", Moisture(value=10.0))
+
+
+def as_json(value: BaseModel) -> object:
+    """Return how ``value`` looks on the wire.
+
+    Loosely typed on purpose: Pydantic declares ``model_dump`` as returning a
+    mapping, but a scalar value object serialises as a scalar, and the point of
+    these tests is to pin that down rather than to agree with the declaration.
+    """
+    return value.model_dump(mode="json")
+
+
+def test_scalar_values_serialise_as_their_scalar() -> None:
+    """A wrapper is a domain type, not a wire shape (see ``docs/events.md``)."""
+    assert as_json(Location(value="Shelf")) == "Shelf"
+    assert Location(value="Shelf").model_dump_json() == '"Shelf"'
+    assert as_json(Moisture(value=42.0)) == 42.0
+    assert as_json(Temperature(value=21.5)) == 21.5
+    assert as_json(LightLevel(value=800.0)) == 800.0
+    assert as_json(WateringInterval(value=timedelta(days=7))) == "P7D"
+
+
+def test_scalar_values_still_accept_the_wrapped_shape() -> None:
+    """The pre-Phase-2 shape keeps validating, so a stored row still loads."""
+    assert Location.model_validate({"value": "Shelf"}) == Location(value="Shelf")
+    assert Moisture.model_validate({"value": 42.0}) == Moisture(value=42.0)
+    assert WateringInterval.model_validate({"value": 86_400}) == WateringInterval(
+        value=timedelta(days=1)
+    )
+
+
+def test_scalar_values_accept_the_bare_scalar() -> None:
+    assert Location.model_validate("Shelf") == Location(value="Shelf")
+    assert Moisture.model_validate(42.0) == Moisture(value=42.0)
+    assert WateringInterval.model_validate(86_400) == WateringInterval(value=timedelta(days=1))
+
+
+def test_scalar_values_survive_a_json_round_trip() -> None:
+    for value in (
+        Location(value="Shelf"),
+        Moisture(value=42.0),
+        Temperature(value=21.5),
+        LightLevel(value=800.0),
+        WateringInterval(value=timedelta(days=7)),
+    ):
+        assert type(value).model_validate_json(value.model_dump_json()) == value
