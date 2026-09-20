@@ -28,7 +28,7 @@ Examples:
 ```
 feat(care): add AdaptiveWateringSaga
 fix(telemetry): deduplicate by (sensor_id, recorded_at)
-docs(adr): add ADR-003 choosing python-cqrs
+docs(adr): add ADR-0003 write-side outbox
 ```
 
 ## Local development

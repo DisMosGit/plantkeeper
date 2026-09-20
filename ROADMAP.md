@@ -229,8 +229,8 @@
 > **Результат фазы:** `POST /api/v1/plants` создаёт растение и публикует `PlantAdded`.
 
 ### 2.1. Порты (Repository, UoW, Outbox, EventPublisher)
-- [x] `PlantRepository` (Protocol): `add`, `get`, `get_for_update`, `save`, `delete` · `M`
-- [x] `HouseholdRepository`, `CareScheduleRepository`, `SpeciesRepository`, `SensorRepository`, `JournalEntryRepository`, `NotificationRepository` · `M`
+- [x] `PlantRepository` (Protocol): `add`, `get`, `save`, `delete`, `list_by_household` · `M`
+- [x] `HouseholdRepository`, `CareScheduleRepository`, `SpeciesRepository`, `SensorRepository`, `JournalEntryRepository`, `NotificationRepository`; `get_for_update` добавляют household, care schedule, species и notification · `M`
 - [x] `UnitOfWork` (Protocol): репозитории, `commit`, `rollback`, `__aenter__`, `__aexit__` · `M`
 - [x] `OutboxRepository` (Protocol): `append`, `fetch_unpublished`, `mark_published`, `record_failure`, `dead_letter` + `OutboxMessage` · `M`
 - [x] `IdempotencyRepository` (Protocol) и порт `Clock` · `S`
@@ -242,7 +242,7 @@
 - [x] ORM-модель `PlantModel` (таблица `plants` в схеме `write_garden`) · `M`
 - [x] ORM-модели для Care, Catalog, Journal, Telemetry, Notifications и общей `write_shared` · `L` → разбито на 6 задач · `M` каждая
 - [x] Маппинг ORM ↔ домен (mapper-функции по контекстам + outbox) · `M` 🧪
-- [x] `SqlAlchemy*Repository` для каждого порта (10 реализаций) · `L` 🧪
+- [x] `SqlAlchemy*Repository` для каждого порта (9 реализаций, по одной на порт) · `L` 🧪
 - [x] `SqlAlchemyUnitOfWork` (session factory, commit, rollback, `IntegrityError` → `ConcurrentWriteError`) · `M` 🧪
 - [x] `AggregateTracker` — какие агрегаты записали события, в порядке записи · `S` 🧪
 - [x] Коммит: `feat(infra): sqlalchemy models, mappers and repositories` · `L` 🧪
@@ -268,7 +268,7 @@
 - [x] Retry с exponential backoff (tenacity) внутри одного опроса · `S` 🧪
 - [x] DLQ `plantkeeper.dlq.v1` после `outbox_max_attempts` (5) неудачных опросов; неудачная копия в DLQ оставляет строку на повтор · `M` 🧪
 - [x] `attempts` считает неудачные опросы, поэтому рестарт не сбрасывает счётчик · `S` 🧪
-- [x] Интеграция Relay в lifecycle воркера (`make workers`, graceful shutdown по SIGINT/SIGTERM) · `M` 🧪
+- [x] Интеграция Relay в lifecycle воркера (`make workers`, graceful shutdown по SIGINT/SIGTERM); тестом покрыт `OutboxRelay.run`/`stop`, сам `apps/workers/main.py` — нет · `M`
 - [x] Коммит: `feat(infra): faststream kafka publisher and outbox relay` · `M` 🧪
 
 ### 2.6. Kafka producer (FastStream)
@@ -323,18 +323,19 @@
 - [x] Коммит: `test(e2e): write side flow` · `M` 🧪
 
 ### 2.12. Документация фазы
-- [x] ADR `0003-write-side-outbox.md` — почему outbox свой, а не из `python-cqrs` · `M` 📝
+- [x] ADR `0003-write-side-outbox.md` — почему outbox свой, а не из `python-cqrs` (сверено с исходниками `python-cqrs` 4.13) · `M` 📝
 - [x] `docs/events.md` — раздел Transport: топики, body, headers, ключ, at-least-once, DLQ · `M` 📝
 - [x] `CHANGELOG.md` — записи фазы · `S` 📝
 - [x] Коммит: `docs: outbox adr, event transport and changelog` · `M` 📝
 
 **✅ Phase 2 завершена, когда:** `POST /api/v1/plants` работает end-to-end, событие в Kafka, e2e-тест зелёный.
 
-**Статус:** ✅ завершена 2026-09-20. `make lint` чист, `make test` — 319 тестов (unit + integration + e2e на testcontainers).
+**Статус:** ✅ завершена 2026-09-20. `make lint` чист, `make test` — 332 теста (unit + integration + e2e на testcontainers), покрытие 99%.
 
 **Отклонения и уточнения:**
 - `RepositoryProvider` отдаёт порты репозиториев только для чтения: write-хендлеры берут репозитории из `UnitOfWork`, чтобы сессия и транзакция были одними и теми же. Сами порты от этого не изменились.
-- Отдельных unit-тестов на команды и запросы нет: путь покрыт интеграционными (`test_repositories.py` — репозитории, UoW, outbox, идемпотентность) и e2e-тестами (HTTP → outbox → Kafka), а `tests/unit/infrastructure/` — топиками, relay, мапперами и DI.
+- Отдельных unit-тестов на команды и запросы нет: путь покрыт интеграционными (`test_repositories.py` — репозитории, UoW, outbox, идемпотентность) и e2e-тестами (HTTP → outbox → Kafka), а `tests/unit/infrastructure/` — топиками, relay, мапперами и DI. Все 18 операций из OpenAPI-документа вызываются хотя бы одним тестом.
+- `apps/workers/main.py` (signal handlers, `run`, `main`) не покрыт тестами: тестом импортируется только пакет `plantkeeper.workers` (smoke-тест), в отчёт coverage файл не попадает. Тест на lifecycle воркера уместнее в Phase 3, когда в этом же процессе появятся консьюмеры.
 - Задачи, которых не было в исходном плане: зависимости (`asyncpg`, `faststream[kafka]`, `pydantic-settings`, `tenacity`, `alembic`), `POST /api/v1/households`, таблица `write_shared.idempotency_keys`, `make api` / `make workers`, ADR 0003.
 - `POST /api/v1/catalog/sync` кладёт `SpeciesSyncRequested` в outbox напрямую; сага, которая его обработает, — Phase 4.
 - Значения value objects (`Location`, `Moisture`, …) уходят в JSON как скаляры (`"location": "Shelf"`), а не как `{"value": "Shelf"}`: контракт события не должен выдавать устройство домена (`fix(domain): serialise scalar value objects as their scalar`).

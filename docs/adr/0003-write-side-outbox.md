@@ -75,14 +75,38 @@ winning insert makes a concurrent duplicate fail on the primary key; the loser
 then reads the winner's stored response and replays it. The same key with a
 different body is a `409 IdempotencyKeyConflictError`.
 
-**Why not `python-cqrs`'s outbox.** Its model has no `published_at`, no
-`attempts` and no dead-letter marker, so it cannot express "unpublished", "how
-many times has this failed" or "stop retrying this one" — the three questions the
-relay is built around. It also ships no relay, and its event abstractions would
-require a per-event adapter plus a global registry to map a domain event to a
-topic. What `python-cqrs` genuinely provides — `PydanticRequest` /
-`PydanticResponse`, `RequestHandler`, `RequestMap`, `RequestMediator` and the
-Dishka container — is used as-is.
+**Why not `python-cqrs`'s outbox.** Its outbox is a working implementation, not a
+stub: `cqrs.outbox.sqlalchemy.OutboxModel` carries an `event_status` enum
+(`NEW` / `PRODUCED` / `NOT_PRODUCED`), a `flush_counter`, and `cqrs.producer.EventProducer`
+drains batches and updates that status. The decision rests on what it does *not*
+carry, not on it being absent:
+
+* **No publication timestamp and no error text.** `event_status` says a message was
+  produced, never *when*, and a failure increments `flush_counter` without storing
+  the reason — the first two questions an operator asks ("is it stuck, and why?")
+  cannot be answered from the table.
+* **No dead-letter path.** `OutboxModel.get_batch_query` simply stops selecting a row
+  once `flush_counter` reaches `MAX_FLUSH_COUNTER_VALUE` (5). The message is neither
+  published nor reported, and the row stays in the table indistinguishable from work
+  in progress. Our table copies it to `plantkeeper.dlq.v1` with `original_topic` and
+  `error` headers and marks it `dead_lettered_at`, so "gave up" is a state a human
+  can see and act on.
+* **Its Kafka path cannot express this project's message contract.**
+  `KafkaMessageBroker.send_message` calls `producer.produce(topic, payload)` — there
+  is no key and no header parameter anywhere in `cqrs.adapters.protocol.KafkaProducer`
+  — so adopting it would drop the aggregate partition key and the
+  `event_name` / `event_id` headers that `docs/events.md` promises. Its payload is
+  also a compacted binary blob (`PayloadBinary`, orjson plus optional compression)
+  rather than the `jsonb` this table stores, which is what makes a stuck message
+  readable from `psql`.
+
+Two smaller costs point the same way: events must satisfy `INotificationEvent` and be
+registered in the global `OutboxedEventMap` before the repository accepts them, and the
+model is declared on its own `registry().generate_base()`, so the project would carry a
+second declarative base beside `Base`. What `python-cqrs` genuinely provides —
+`PydanticRequest` / `PydanticResponse`, `RequestHandler`, `RequestMap`,
+`RequestMediator` and the Dishka container — is used as-is, and
+[ADR 0006](0006-why-python-cqrs.md) (Phase 10) records that split.
 
 ## Consequences
 
@@ -121,4 +145,8 @@ Dishka container — is used as-is.
   direct calls, are the only channel between contexts
 - [`packages/infrastructure/src/plantkeeper/infrastructure/messaging/relay.py`](../../packages/infrastructure/src/plantkeeper/infrastructure/messaging/relay.py)
   — the relay
+- The compared implementation, read from the installed `python-cqrs` 4.13:
+  `cqrs/outbox/sqlalchemy.py` (the model and its batch query), `cqrs/producer.py`
+  (the drain loop), `cqrs/message_brokers/kafka.py` and
+  `cqrs/adapters/protocol.py` (the keyless, headerless produce call)
 - [microservices.io — Transactional outbox](https://microservices.io/patterns/data/transactional-outbox.html)
