@@ -12,6 +12,9 @@ Versioning: [Semantic Versioning](https://semver.org/).
 - Shared configs: Ruff, Mypy strict, pytest-asyncio, pre-commit.
 - `README.md`, `CONTRIBUTING.md`, `LICENSE.md`, `CHANGELOG.md`.
 - `Makefile` with `dev`, `lint`, `test`, `migrate`, `iot`, `clean`.
+- Phase 1 domain layer: typed value objects, entity/event base classes and seven bounded contexts (Garden, Care, Catalog, Journal, Telemetry, Notifications, Identity) with their invariants and 21 domain events.
+- `docs/domain.md` ubiquitous language and aggregate map, `docs/events.md` event catalogue, and ADR `0002-bounded-contexts.md`.
+- `make test-domain` — domain unit tests with the Phase 1 90% coverage floor.
 
 ### Changed
 -

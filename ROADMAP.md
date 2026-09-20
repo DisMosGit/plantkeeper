@@ -139,73 +139,87 @@
 > **Цель:** чистый домен без зависимостей от инфраструктуры.
 > **Результат фазы:** агрегаты, VO, события, инварианты с покрытием ≥ 90%.
 
+> **Статус:** ✅ выполнено — 7 bounded contexts и 21 доменное событие в
+> `packages/domain`, `make lint && make test` зелёные, `make test-domain` держит
+> покрытие домена на 100% (порог 90%). Коммиты созданы локально, push в `origin`
+> не выполнялся.
+
 ### 1.1. Общие Value Objects
-- [ ] `HouseholdId`, `PlantId`, `SensorId`, `SpeciesId`, `JournalEntryId`, `NotificationId`, `UserId` (UUID-обёртки) · `S` 🧪
-- [ ] `Location` (строка с валидацией длины 1–100) · `S` 🧪
-- [ ] `Moisture` (float 0–100, immutable) · `S` 🧪
-- [ ] `Temperature` (−50..+60 °C) · `S` 🧪
-- [ ] `LightLevel` (люкс, ≥ 0) · `S` 🧪
-- [ ] `WateringInterval` (timedelta > 0) · `S` 🧪
-- [ ] `CareRule` (полив, удобрение, пересадка) · `M` 🧪
-- [ ] `SensorReading` (sensor_id, recorded_at, moisture, temp, light) · `S` 🧪
-- [ ] Коммит: `feat(domain): value objects` · `M` 🧪
+- [x] `HouseholdId`, `PlantId`, `SensorId`, `SpeciesId`, `JournalEntryId`, `NotificationId`, `UserId` (UUID-обёртки) · `S` 🧪
+- [x] `Location` (строка с валидацией длины 1–100) · `S` 🧪
+- [x] `Moisture` (float 0–100, immutable) · `S` 🧪
+- [x] `Temperature` (−50..+60 °C) · `S` 🧪
+- [x] `LightLevel` (люкс, ≥ 0) · `S` 🧪
+- [x] `WateringInterval`, `FertilizingInterval`, `RepottingInterval` (timedelta > 0) · `S` 🧪
+- [x] `CareRule` (полив, удобрение, пересадка) · `M` 🧪
+- [x] `SensorReading` (sensor_id, recorded_at, moisture, temp, light) · `S` 🧪
+- [x] Коммит: `feat(domain): value objects` · `M` 🧪
 
 **DoD:** все VO покрыты тестами на валидацию границ.
 
 ### 1.2. Базовые классы домена
-- [ ] `Entity` (базовый класс с `id`) · `S`
-- [ ] `AggregateRoot` (наследует Entity, содержит `_events`, `collect_events()`) · `M` 🧪
-- [ ] `DomainEvent` (Pydantic BaseModel с `event_id`, `occurred_at`) · `S` 🧪
-- [ ] `DomainError` (базовое исключение) · `S`
-- [ ] Коммит: `feat(domain): base classes for entities and events` · `M` 🧪
+- [x] `Entity` (базовый класс с `id`) · `S`
+- [x] `AggregateRoot` (наследует Entity, содержит `_events`, `collect_events()`) · `M` 🧪
+- [x] `DomainEvent` (Pydantic BaseModel с `event_id`, `occurred_at`) · `S` 🧪
+- [x] `DomainError` (базовое исключение) · `S`
+- [x] Коммит: `feat(domain): base classes for entities and events` · `M` 🧪
 
 ### 1.3. Bounded Context: Garden
-- [ ] Агрегат `Plant` (id, household_id, species_id, name, location, added_at) · `M` 🧪
-- [ ] Инварианты: name не пустое; нельзя полить дважды за час; нельзя пересадить чаще 6 мес · `M` 🧪
-- [ ] Команды: `add_plant`, `remove_plant`, `move_plant`, `water` · `M` 🧪
-- [ ] События: `PlantAdded`, `PlantRemoved`, `PlantMoved`, `PlantOnboarded` · `M` 🧪
-- [ ] Агрегат `Household` (max 50 растений) · `M` 🧪
-- [ ] Коммит: `feat(domain): garden context` · `M` 🧪
+- [x] Агрегат `Plant` (id, household_id, species_id, name, location, added_at) · `M` 🧪
+- [x] Инварианты: name не пустое; нельзя полить дважды за час; нельзя пересадить чаще 6 мес · `M` 🧪
+- [x] Команды: `add_plant`, `remove_plant`, `move_plant`, `water` · `M` 🧪
+- [x] События: `PlantAdded`, `PlantRemoved`, `PlantMoved`, `PlantOnboarded` · `M` 🧪
+- [x] Агрегат `Household` (max 50 растений) · `M` 🧪
+- [x] Коммит: `feat(domain): garden context` · `M` 🧪
 
 ### 1.4. Bounded Context: Care
-- [ ] Агрегат `CareSchedule` (plant_id, watering_interval, next_watering_at, version) · `M` 🧪
-- [ ] Инварианты: interval > 0; next ≥ now; version инкрементируется · `M` 🧪
-- [ ] Оптимистичная блокировка через `version` · `S` 🧪
-- [ ] События: `CareScheduleCreated`, `WateringDue`, `WateringCompleted`, `WateringRescheduled`, `CareMissed`, `CareSkipped` · `M` 🧪
-- [ ] Коммит: `feat(domain): care context` · `M` 🧪
+- [x] Агрегат `CareSchedule` (plant_id, watering_interval, next_watering_at, version) · `M` 🧪
+- [x] Инварианты: interval > 0; next ≥ now; version инкрементируется · `M` 🧪
+- [x] Оптимистичная блокировка через `version` · `S` 🧪
+- [x] События: `CareScheduleCreated`, `WateringDue`, `WateringCompleted`, `WateringRescheduled`, `CareMissed`, `CareSkipped` · `M` 🧪
+- [x] Коммит: `feat(domain): care context` · `M` 🧪
 
 ### 1.5. Bounded Context: Catalog
-- [ ] Агрегат `Species` (scientific_name, common_name, watering_interval, light_requirement, version) · `M` 🧪
-- [ ] События: `SpeciesSyncRequested`, `SpeciesUpdated`, `SpeciesCacheInvalidated` · `S` 🧪
-- [ ] Коммит: `feat(domain): catalog context` · `M` 🧪
+- [x] Агрегат `Species` (scientific_name, common_name, watering_interval, light_requirement, version) · `M` 🧪
+- [x] События: `SpeciesSyncRequested`, `SpeciesUpdated`, `SpeciesCacheInvalidated` · `S` 🧪
+- [x] Коммит: `feat(domain): catalog context` · `M` 🧪
 
 ### 1.6. Bounded Context: Journal (Event Sourcing)
-- [ ] Агрегат `JournalEntry` (append-only, immutable) · `M` 🧪
-- [ ] `JournalStream` — упорядоченный список записей по plant_id · `M` 🧪
-- [ ] Событие `JournalEntryAdded` · `S` 🧪
-- [ ] Коммит: `feat(domain): journal context (event-sourced)` · `M` 🧪
+- [x] Агрегат `JournalEntry` (append-only, immutable) · `M` 🧪
+- [x] `JournalStream` — упорядоченный список записей по plant_id · `M` 🧪
+- [x] Событие `JournalEntryAdded` · `S` 🧪
+- [x] Коммит: `feat(domain): journal context (event-sourced)` · `M` 🧪
 
 ### 1.7. Bounded Context: Telemetry
-- [ ] Агрегат `Sensor` (sensor_id, plant_id, added_at) · `S` 🧪
-- [ ] События: `TelemetryReceived`, `SoilMoistureLow`, `SoilMoistureHigh`, `TemperatureAnomaly`, `SensorOffline` · `M` 🧪
-- [ ] Коммит: `feat(domain): telemetry context` · `M` 🧪
+- [x] Агрегат `Sensor` (sensor_id, plant_id, added_at) · `S` 🧪
+- [x] События: `TelemetryReceived`, `SoilMoistureLow`, `SoilMoistureHigh`, `TemperatureAnomaly`, `SensorOffline` · `M` 🧪
+- [x] Коммит: `feat(domain): telemetry context` · `M` 🧪
 
 ### 1.8. Bounded Context: Notifications
-- [ ] Агрегат `Notification` (household_id, type, payload, created_at, read_at) · `M` 🧪
-- [ ] События: `NotificationCreated`, `NotificationRead` · `S` 🧪
-- [ ] Коммит: `feat(domain): notifications context` · `M` 🧪
+- [x] Агрегат `Notification` (household_id, type, payload, created_at, read_at) · `M` 🧪
+- [x] События: `NotificationCreated`, `NotificationRead` · `S` 🧪
+- [x] Коммит: `feat(domain): notifications context` · `M` 🧪
 
 ### 1.9. Bounded Context: Identity
-- [ ] Агрегат `User` (без auth, просто участник household) · `S` 🧪
-- [ ] Коммит: `feat(domain): identity context` · `S` 🧪
+- [x] Агрегат `User` (без auth, просто участник household) · `S` 🧪
+- [x] Коммит: `feat(domain): identity context` · `S` 🧪
 
 ### 1.10. Документация домена
-- [ ] `docs/domain.md` — Ubiquitous Language глоссарий · `M` 📝
-- [ ] `docs/domain.md` — диаграмма агрегатов (Mermaid) · `M` 📝
-- [ ] ADR `0002-bounded-contexts.md` — почему 8 BC · `M` 📝
-- [ ] Коммит: `docs: domain glossary + BC map` · `M` 📝
+- [x] `docs/domain.md` — Ubiquitous Language глоссарий · `M` 📝
+- [x] `docs/domain.md` — диаграмма агрегатов (Mermaid) · `M` 📝
+- [x] `docs/events.md` — каталог 21 доменного события · `M` 📝
+- [x] ADR `0002-bounded-contexts.md` — почему 8 BC · `M` 📝
+- [x] Коммит: `docs: domain glossary + BC map` · `M` 📝
 
-**✅ Phase 1 завершена, когда:** покрытие domain ≥ 90%, все инварианты покрыты тестами, `docs/domain.md` заполнен.
+### 1.11. Контракт независимости контекстов
+- [ ] import-linter contract `independence` для 7 контекстов домена · `S` 🧪
+- [ ] Коммит: `chore(lint): enforce domain context independence` · `S`
+
+### 1.12. Контрактный тест каталога событий
+- [x] `tests/unit/domain/test_events_catalogue.py` — 21 событие, базовые поля, JSON round-trip · `S` 🧪
+- [x] Коммит: `test(domain): event catalogue contract` · `S` 🧪
+
+**✅ Phase 1 завершена, когда:** покрытие domain ≥ 90%, все инварианты покрыты тестами, `docs/domain.md` и `docs/events.md` заполнены.
 
 ---
 
