@@ -30,6 +30,11 @@ from plantkeeper.application.ports.repositories import (
     SensorRepository,
     SpeciesRepository,
 )
+from plantkeeper.application.ports.sagas import (
+    MissedCareWindowRepository,
+    ProcessedEventRepository,
+    SagaStateRepository,
+)
 from plantkeeper.infrastructure.persistence.repositories.care import (
     SqlAlchemyCareScheduleRepository,
 )
@@ -51,6 +56,11 @@ from plantkeeper.infrastructure.persistence.repositories.notifications import (
 )
 from plantkeeper.infrastructure.persistence.repositories.outbox import (
     SqlAlchemyOutboxRepository,
+)
+from plantkeeper.infrastructure.persistence.repositories.sagas import (
+    SqlAlchemyMissedCareWindowRepository,
+    SqlAlchemyProcessedEventRepository,
+    SqlAlchemySagaStateRepository,
 )
 from plantkeeper.infrastructure.persistence.repositories.telemetry import (
     SqlAlchemySensorRepository,
@@ -79,6 +89,9 @@ class SqlAlchemyUnitOfWork:
         self._notifications = SqlAlchemyNotificationRepository(session, self._tracker)
         self._outbox = SqlAlchemyOutboxRepository(session)
         self._idempotency = SqlAlchemyIdempotencyRepository(session)
+        self._processed_events = SqlAlchemyProcessedEventRepository(session)
+        self._saga_states = SqlAlchemySagaStateRepository(session)
+        self._missed_care_windows = SqlAlchemyMissedCareWindowRepository(session)
 
     @property
     def plants(self) -> PlantRepository:
@@ -124,6 +137,21 @@ class SqlAlchemyUnitOfWork:
     def idempotency(self) -> IdempotencyRepository:
         """Stored responses, bound to this transaction."""
         return self._idempotency
+
+    @property
+    def processed_events(self) -> ProcessedEventRepository:
+        """The consumer ledger, bound to this transaction."""
+        return self._processed_events
+
+    @property
+    def saga_states(self) -> SagaStateRepository:
+        """Saga executions, bound to this transaction."""
+        return self._saga_states
+
+    @property
+    def missed_care_windows(self) -> MissedCareWindowRepository:
+        """Missed-care grace windows, bound to this transaction."""
+        return self._missed_care_windows
 
     async def __aenter__(self) -> Self:
         """Enter the transaction.

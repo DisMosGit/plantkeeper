@@ -36,6 +36,11 @@ from plantkeeper.infrastructure.persistence.mappers.outbox import (
     outbox_message_from_model,
     outbox_model_from_event,
 )
+from plantkeeper.infrastructure.persistence.mappers.sagas import (
+    missed_care_window_to_domain,
+    missed_care_window_to_model,
+    saga_state_to_domain,
+)
 from plantkeeper.infrastructure.persistence.mappers.telemetry import (
     sensor_to_domain,
     sensor_to_model,
@@ -50,12 +55,15 @@ __all__ = (
     "idempotency_to_model",
     "journal_entry_to_domain",
     "journal_entry_to_model",
+    "missed_care_window_to_domain",
+    "missed_care_window_to_model",
     "notification_to_domain",
     "notification_to_model",
     "outbox_message_from_model",
     "outbox_model_from_event",
     "plant_to_domain",
     "plant_to_model",
+    "saga_state_to_domain",
     "sensor_to_domain",
     "sensor_to_model",
     "species_to_domain",

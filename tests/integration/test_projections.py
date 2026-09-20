@@ -51,6 +51,12 @@ from plantkeeper.domain.journal.events import JournalEntryAdded
 from plantkeeper.domain.journal.values import JournalEntryType
 from plantkeeper.domain.notifications.events import NotificationCreated, NotificationRead
 from plantkeeper.domain.notifications.values import NotificationType
+from plantkeeper.domain.saga.events import (
+    SagaCompensated,
+    SagaCompleted,
+    SagaFailed,
+    SagaStarted,
+)
 from plantkeeper.domain.telemetry.events import (
     SensorOffline,
     SoilMoistureHigh,
@@ -85,6 +91,11 @@ UNPROJECTED_EVENTS: set[type[DomainEvent]] = {
     SoilMoistureHigh,
     TemperatureAnomaly,
     SensorOffline,
+    # Saga/system: the read side does not project process-manager progress.
+    SagaStarted,
+    SagaCompleted,
+    SagaFailed,
+    SagaCompensated,
 }
 """Catalogue events no Phase 3 projection consumes, named so the gap is a decision."""
 

@@ -24,6 +24,11 @@ from plantkeeper.infrastructure.persistence.repositories.notifications import (
 from plantkeeper.infrastructure.persistence.repositories.outbox import (
     SqlAlchemyOutboxRepository,
 )
+from plantkeeper.infrastructure.persistence.repositories.sagas import (
+    SqlAlchemyMissedCareWindowRepository,
+    SqlAlchemyProcessedEventRepository,
+    SqlAlchemySagaStateRepository,
+)
 from plantkeeper.infrastructure.persistence.repositories.telemetry import (
     SqlAlchemySensorRepository,
 )
@@ -33,9 +38,12 @@ __all__ = (
     "SqlAlchemyHouseholdRepository",
     "SqlAlchemyIdempotencyRepository",
     "SqlAlchemyJournalEntryRepository",
+    "SqlAlchemyMissedCareWindowRepository",
     "SqlAlchemyNotificationRepository",
     "SqlAlchemyOutboxRepository",
     "SqlAlchemyPlantRepository",
+    "SqlAlchemyProcessedEventRepository",
+    "SqlAlchemySagaStateRepository",
     "SqlAlchemySensorRepository",
     "SqlAlchemySpeciesRepository",
 )

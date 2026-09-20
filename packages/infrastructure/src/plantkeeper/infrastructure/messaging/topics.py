@@ -37,6 +37,12 @@ from plantkeeper.domain.catalog.events import (
 from plantkeeper.domain.garden.events import PlantAdded, PlantMoved, PlantOnboarded, PlantRemoved
 from plantkeeper.domain.journal.events import JournalEntryAdded
 from plantkeeper.domain.notifications.events import NotificationCreated, NotificationRead
+from plantkeeper.domain.saga.events import (
+    SagaCompensated,
+    SagaCompleted,
+    SagaFailed,
+    SagaStarted,
+)
 from plantkeeper.domain.telemetry.events import (
     SensorOffline,
     SoilMoistureHigh,
@@ -51,6 +57,7 @@ CATALOG_EVENTS: Final = "catalog.events"
 JOURNAL_EVENTS: Final = "journal.events"
 TELEMETRY_EVENTS: Final = "telemetry.events"
 NOTIFICATIONS_EVENTS: Final = "notifications.events"
+SAGA_EVENTS: Final = "saga.events"
 
 EVENT_TOPICS: Final[dict[type[DomainEvent], str]] = {
     # Garden
@@ -80,6 +87,11 @@ EVENT_TOPICS: Final[dict[type[DomainEvent], str]] = {
     # Notifications
     NotificationCreated: NOTIFICATIONS_EVENTS,
     NotificationRead: NOTIFICATIONS_EVENTS,
+    # Saga / system
+    SagaStarted: SAGA_EVENTS,
+    SagaCompleted: SAGA_EVENTS,
+    SagaFailed: SAGA_EVENTS,
+    SagaCompensated: SAGA_EVENTS,
 }
 """The topic of every event in ``docs/events.md``."""
 
@@ -94,8 +106,12 @@ carries every event of its context.
 DLQ_TOPIC: Final = "plantkeeper.dlq.v1"
 """Where the relay copies a message that exhausted its publish attempts."""
 
-PARTITION_KEY_FIELDS: Final = ("plant_id", "household_id", "species_id", "sensor_id")
-"""Payload fields tried, in order, when deriving a message key."""
+PARTITION_KEY_FIELDS: Final = ("plant_id", "household_id", "species_id", "sensor_id", "saga_id")
+"""Payload fields tried, in order, when deriving a message key.
+
+``saga_id`` comes last: a saga lifecycle event carries no aggregate identifier, and
+keying it by the saga keeps its four messages in one partition, in order.
+"""
 
 HEADER_EVENT_NAME: Final = "event_name"
 HEADER_EVENT_ID: Final = "event_id"

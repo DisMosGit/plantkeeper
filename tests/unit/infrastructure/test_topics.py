@@ -2,13 +2,14 @@
 
 ``docs/events.md`` fixes the event catalogue, ``tests/unit/domain/test_events_catalogue.py``
 guards it, and this module guards the other half of the contract: every one of
-those 21 events must have a topic, and no topic may be invented for an event that
+those 25 events must have a topic, and no topic may be invented for an event that
 does not exist.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from uuid import uuid7
 
 import pytest
 
@@ -40,6 +41,12 @@ from plantkeeper.domain.journal.events import JournalEntryAdded
 from plantkeeper.domain.journal.values import JournalEntryType
 from plantkeeper.domain.notifications.events import NotificationCreated, NotificationRead
 from plantkeeper.domain.notifications.values import NotificationType
+from plantkeeper.domain.saga.events import (
+    SagaCompensated,
+    SagaCompleted,
+    SagaFailed,
+    SagaStarted,
+)
 from plantkeeper.domain.telemetry.events import (
     SensorOffline,
     SoilMoistureHigh,
@@ -56,6 +63,7 @@ from plantkeeper.infrastructure.messaging.topics import (
     GARDEN_EVENTS,
     JOURNAL_EVENTS,
     NOTIFICATIONS_EVENTS,
+    SAGA_EVENTS,
     TELEMETRY_EVENTS,
     UnmappedEventError,
     event_type_for,
@@ -69,6 +77,7 @@ PLANT = PlantId.new()
 HOUSEHOLD = HouseholdId.new()
 SPECIES = SpeciesId.new()
 SENSOR = SensorId.new()
+SAGA = uuid7()
 
 EVENT_SAMPLES: list[DomainEvent] = [
     PlantAdded(
@@ -147,11 +156,15 @@ EVENT_SAMPLES: list[DomainEvent] = [
         created_at=NOW,
     ),
     NotificationRead(notification_id=NotificationId.new(), household_id=HOUSEHOLD, read_at=NOW),
+    SagaStarted(saga_id=SAGA, saga_name="OnboardPlantSaga", occurred_at=NOW),
+    SagaCompleted(saga_id=SAGA, saga_name="OnboardPlantSaga", occurred_at=NOW),
+    SagaFailed(saga_id=SAGA, saga_name="OnboardPlantSaga", error="boom", occurred_at=NOW),
+    SagaCompensated(saga_id=SAGA, saga_name="OnboardPlantSaga", occurred_at=NOW),
 ]
 
 
 def test_every_catalogued_event_has_a_topic() -> None:
-    assert len(EVENT_SAMPLES) == 21
+    assert len(EVENT_SAMPLES) == 25
     assert {type(event) for event in EVENT_SAMPLES} == set(EVENT_TOPICS)
 
 
@@ -168,6 +181,7 @@ def test_topics_are_grouped_per_bounded_context() -> None:
         JOURNAL_EVENTS,
         TELEMETRY_EVENTS,
         NOTIFICATIONS_EVENTS,
+        SAGA_EVENTS,
     }
 
 
@@ -206,6 +220,8 @@ def test_every_event_has_a_partition_key(event: DomainEvent) -> None:
         ),
         (SpeciesCacheInvalidated(species_id=SPECIES), str(SPECIES)),
         (WateringDue(plant_id=PLANT, due_at=NOW), str(PLANT)),
+        # A saga lifecycle event carries no aggregate id: its saga keys the partition.
+        (SagaCompleted(saga_id=SAGA, saga_name="OnboardPlantSaga"), str(SAGA)),
     ],
 )
 def test_partition_key_prefers_an_aggregate_identifier(event: DomainEvent, expected: str) -> None:

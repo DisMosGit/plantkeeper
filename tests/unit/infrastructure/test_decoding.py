@@ -3,9 +3,13 @@
 ``decode_event`` is where a Kafka delivery becomes a domain event, and where the
 decision to *skip* rather than *fail* lives. These tests pin that policy: an
 unknown event name, a missing header or a body that does not validate produces
-``None`` — the subscriber logs it and acknowledges — because one bad producer must
+``None`` — the consumer logs it and acknowledges — because one bad producer must
 not be able to block a partition. A message that cannot be read at all is the only
 case that should ever raise.
+
+The policy is shared: the read side's projections and the write side's sagas both
+call this function, so it is tested next to its implementation rather than inside
+the app that used to own it.
 """
 
 from __future__ import annotations
@@ -17,10 +21,10 @@ from uuid import UUID
 from faststream.kafka import KafkaMessage
 from faststream.kafka.message import ConsumerProtocol
 
-from plantkeeper.admin.projections.subscriber import decode_event
 from plantkeeper.domain.garden.events import PlantAdded
 from plantkeeper.domain.identifiers import HouseholdId, PlantId, SpeciesId
 from plantkeeper.domain.values import Location
+from plantkeeper.infrastructure.messaging.decoding import decode_event
 
 
 def plant_added() -> PlantAdded:

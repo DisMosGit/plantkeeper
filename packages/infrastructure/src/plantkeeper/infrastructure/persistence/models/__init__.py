@@ -11,7 +11,10 @@ first migration) stays empty until a user flow needs it.
 
 from __future__ import annotations
 
-from plantkeeper.infrastructure.persistence.models.care import CareScheduleModel
+from plantkeeper.infrastructure.persistence.models.care import (
+    CareScheduleModel,
+    MissedCareWindowModel,
+)
 from plantkeeper.infrastructure.persistence.models.catalog import SpeciesModel
 from plantkeeper.infrastructure.persistence.models.garden import HouseholdModel, PlantModel
 from plantkeeper.infrastructure.persistence.models.journal import JournalEntryModel
@@ -19,6 +22,9 @@ from plantkeeper.infrastructure.persistence.models.notifications import Notifica
 from plantkeeper.infrastructure.persistence.models.shared import (
     IdempotencyKeyModel,
     OutboxModel,
+    ProcessedEventModel,
+    SagaLogModel,
+    SagaStateModel,
 )
 from plantkeeper.infrastructure.persistence.models.telemetry import SensorModel
 
@@ -27,9 +33,13 @@ __all__ = (
     "HouseholdModel",
     "IdempotencyKeyModel",
     "JournalEntryModel",
+    "MissedCareWindowModel",
     "NotificationModel",
     "OutboxModel",
     "PlantModel",
+    "ProcessedEventModel",
+    "SagaLogModel",
+    "SagaStateModel",
     "SensorModel",
     "SpeciesModel",
 )

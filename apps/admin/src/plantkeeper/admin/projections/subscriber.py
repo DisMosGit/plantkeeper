@@ -2,8 +2,10 @@
 
 One subscriber per (projection, topic). The message is envelope-less — the body
 is the event document and ``event_name``/``event_id`` travel in the headers — so
-this module is where the header is turned back into a type, the body into an
-event, and the event into a projection call.
+this module turns the header back into a type, the body into an event, and the
+event into a projection call. The decoding itself lives in
+``plantkeeper.infrastructure.messaging.decoding`` so the write side's sagas read
+the same contract.
 
 Failure policy, deliberately three-way:
 
@@ -20,22 +22,14 @@ Failure policy, deliberately three-way:
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any, cast
 
 from faststream.kafka import KafkaBroker, KafkaMessage
-from pydantic import ValidationError
 
 from plantkeeper.admin.projections import ALL_PROJECTIONS
 from plantkeeper.admin.projections.base import Projection, apply_event
-from plantkeeper.domain.base import DomainEvent
-from plantkeeper.infrastructure.messaging.topics import (
-    HEADER_EVENT_ID,
-    HEADER_EVENT_NAME,
-    event_type_for,
-)
+from plantkeeper.infrastructure.messaging.decoding import decode_event
 
 logger = logging.getLogger(__name__)
 
@@ -78,48 +72,3 @@ def build_handler(projection: Projection, *, consumer_group: str) -> ProjectionS
             )
 
     return handle
-
-
-def decode_event(message: KafkaMessage) -> DomainEvent | None:
-    """Turn a Kafka message back into the event its headers name.
-
-    ``None`` means "skip and acknowledge": either the type is unknown or the body
-    does not satisfy it. Both are logged with the ``event_id`` so the offending
-    message can be found in the topic.
-    """
-    event_name = _header(message, HEADER_EVENT_NAME)
-    event_id = _header(message, HEADER_EVENT_ID)
-    if event_name is None:
-        logger.warning("message without an %s header; skipping", HEADER_EVENT_NAME)
-        return None
-    model = event_type_for(event_name)
-    if model is None:
-        logger.warning("unknown event %r (event_id=%s); skipping", event_name, event_id)
-        return None
-    try:
-        return model.model_validate(_body(message))
-    except ValidationError:
-        logger.exception("event %s (%s) failed validation; skipping", event_name, event_id)
-        return None
-
-
-def _header(message: KafkaMessage, name: str) -> str | None:
-    """Read one header as text, whatever the broker handed over."""
-    value: Any = message.headers.get(name)
-    if value is None:
-        return None
-    if isinstance(value, bytes):
-        return value.decode()
-    return str(value)
-
-
-def _body(message: KafkaMessage) -> dict[str, Any]:
-    """Return the message body as the mapping a Pydantic model can validate.
-
-    FastStream's default JSON parser usually hands over a mapping already; a test
-    or a custom deserialiser may leave the raw bytes in place.
-    """
-    body: Any = message.body
-    if isinstance(body, bytes | str):
-        return cast("dict[str, Any]", json.loads(body))
-    return cast("dict[str, Any]", body)
