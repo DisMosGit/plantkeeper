@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from valkey.asyncio import Valkey
 
 from plantkeeper.application.commands.care import SkipWateringHandler, WaterPlantHandler
 from plantkeeper.application.commands.catalog import RequestSpeciesSyncHandler
@@ -46,6 +47,7 @@ from plantkeeper.application.ports.event_store import (
     EventStoreRepository,
     JournalSnapshotRepository,
 )
+from plantkeeper.application.ports.notifications import NotificationChannel
 from plantkeeper.application.ports.repositories import (
     CareScheduleRepository,
     HouseholdRepository,
@@ -100,6 +102,7 @@ from plantkeeper.infrastructure.config import Settings
 from plantkeeper.infrastructure.messaging.broker import build_broker
 from plantkeeper.infrastructure.messaging.publisher import KafkaEventPublisher
 from plantkeeper.infrastructure.messaging.relay import OutboxRelay
+from plantkeeper.infrastructure.notifications.channel import ValkeyNotificationChannel
 from plantkeeper.infrastructure.persistence.repositories.care import (
     SqlAlchemyCareScheduleRepository,
 )
@@ -314,6 +317,30 @@ class MessagingProvider(Provider):
         return OutboxRelay(session_factory=session_factory, publisher=publisher, settings=settings)
 
 
+class NotificationProvider(Provider):
+    """Valkey, and the presence channel a long poll waits on.
+
+    The client lives for the process; it is created lazily, so a container that
+    never resolves the channel — the gRPC process, a test that only builds
+    handlers — never opens a connection to Valkey. Subscriptions do not use this
+    client's connection: the adapter opens one per subscription.
+    """
+
+    @provide(scope=Scope.APP)
+    async def valkey(self, settings: Settings) -> AsyncIterator[Valkey]:
+        """Connect on first use and release the connection pool on shutdown."""
+        client = Valkey.from_url(settings.valkey_url, decode_responses=True)
+        try:
+            yield client
+        finally:
+            await client.aclose()
+
+    @provide(scope=Scope.APP)
+    def notification_channel(self, valkey: Valkey) -> NotificationChannel:
+        """Expose the channel through its application-layer port."""
+        return ValkeyNotificationChannel(valkey)
+
+
 def build_handler_provider() -> Provider:
     """Return a provider that registers every handler at ``REQUEST`` scope.
 
@@ -408,15 +435,18 @@ def build_saga_component_provider() -> Provider:
 def worker_providers() -> list[Provider]:
     """Return the providers the outbox relay worker needs.
 
-    The saga providers are here and not in ``api_providers``: the API writes to the
-    outbox and never consumes, so building a saga storage in it would only add a
-    second writer to the process that must not have one.
+    The saga providers and the notification channel are here and not in
+    ``api_providers``: the API writes to the outbox and never consumes, so
+    building a saga storage in it would only add a second writer to the process
+    that must not have one. The worker holds the channel because it is what wakes
+    a household whose long poll is waiting.
     """
     return [
         AppProvider(),
         DatabaseProvider(),
         RepositoryProvider(),
         MessagingProvider(),
+        NotificationProvider(),
         SagaProvider(),
         build_handler_provider(),
         build_saga_component_provider(),
@@ -427,11 +457,14 @@ def api_providers() -> list[Provider]:
     """Return the providers the HTTP API needs.
 
     The API never publishes: it writes to the outbox and the relay does the rest,
-    so the Kafka broker is not part of its container.
+    so the Kafka broker is not part of its container. It does hold the
+    notification channel, because the long-poll endpoint subscribes to it, and
+    that client is only opened if such a request arrives.
     """
     return [
         AppProvider(),
         DatabaseProvider(),
         RepositoryProvider(),
+        NotificationProvider(),
         build_handler_provider(),
     ]

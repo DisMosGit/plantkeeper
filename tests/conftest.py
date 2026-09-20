@@ -28,6 +28,7 @@ from alembic.config import Config
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from testcontainers.community.postgres import PostgresContainer
+from testcontainers.community.valkey import ValkeyContainer
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
@@ -38,6 +39,7 @@ from plantkeeper.infrastructure.persistence.base import Base
 
 DEFAULT_POSTGRES_IMAGE = "postgres:18-alpine"
 DEFAULT_KAFKA_IMAGE = "apache/kafka:4.1.1"
+DEFAULT_VALKEY_IMAGE = "valkey/valkey:9-alpine"
 
 KAFKA_INTERNAL_PORT = 9092
 """The port the broker listens on inside the container (see docker-compose.yml)."""
@@ -305,3 +307,31 @@ def kafka_container() -> Iterator[ApacheKafkaContainer]:
 def kafka_bootstrap_servers(kafka_container: ApacheKafkaContainer) -> str:
     """The bootstrap address of the integration broker."""
     return kafka_container.get_bootstrap_server()
+
+
+# -----------------------------------------------------------------------------
+# Valkey (the notification channel)
+# -----------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def valkey_image() -> str:
+    """Docker image used for the notification channel's container."""
+    return os.getenv("VALKEY_IMAGE", DEFAULT_VALKEY_IMAGE)
+
+
+@pytest.fixture(scope="session")
+def valkey_container(valkey_image: str) -> Iterator[ValkeyContainer]:
+    """Session-scoped Valkey, started only when a test requests this fixture.
+
+    Same laziness as Postgres and Kafka: the unit suite never touches Docker, and
+    only the notification channel tests and the end-to-end suite ask for this.
+    """
+    with ValkeyContainer(valkey_image) as container:
+        yield container
+
+
+@pytest.fixture(scope="session")
+def valkey_url(valkey_container: ValkeyContainer) -> str:
+    """The connection URL of the notification channel's Valkey."""
+    return valkey_container.get_connection_url()

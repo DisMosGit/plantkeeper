@@ -24,6 +24,11 @@ from plantkeeper.application.ports.idempotency import (
     IdempotencyRecord,
     IdempotencyRepository,
 )
+from plantkeeper.application.ports.notifications import (
+    NotificationChannel,
+    NotificationChannelError,
+    NotificationSubscription,
+)
 from plantkeeper.application.ports.outbox import OutboxMessage, OutboxRepository
 from plantkeeper.application.ports.repositories import (
     CareScheduleRepository,
@@ -57,7 +62,10 @@ __all__ = (
     "MissedCareState",
     "MissedCareWindow",
     "MissedCareWindowRepository",
+    "NotificationChannel",
+    "NotificationChannelError",
     "NotificationRepository",
+    "NotificationSubscription",
     "OutboxMessage",
     "OutboxRepository",
     "PlantRepository",
