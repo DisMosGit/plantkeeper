@@ -17,8 +17,13 @@ from faststream.kafka import KafkaBroker, KafkaMessage
 from plantkeeper.application.sagas.registry import WORKER_CONSUMER_TYPES
 from plantkeeper.domain.garden.events import PlantAdded, PlantMoved
 from plantkeeper.infrastructure.config import Settings
-from plantkeeper.infrastructure.messaging.topics import EVENT_TOPICS
-from plantkeeper.workers.consumers import register_consumers, topics_for
+from plantkeeper.infrastructure.messaging.topics import EVENT_TOPICS, TELEMETRY_RAW
+from plantkeeper.workers.consumers import (
+    TELEMETRY_INGEST_OFFSET_RESET,
+    register_consumers,
+    register_telemetry_ingest,
+    topics_for,
+)
 
 Subscriber = Callable[[KafkaMessage], Awaitable[None]]
 
@@ -75,3 +80,39 @@ def test_every_subscription_replays_from_the_beginning() -> None:
     )
 
     assert {auto_offset_reset for _, _, auto_offset_reset, _ in broker.routes} == {"earliest"}
+
+
+def test_the_telemetry_ingress_is_subscribed_to_the_raw_topic_alone() -> None:
+    """Raw telemetry is not a domain event, so it is registered on its own."""
+    broker = FakeBroker()
+    settings = Settings(
+        telemetry_raw_topic=TELEMETRY_RAW,
+        telemetry_ingest_consumer_group="test-telemetry-ingest",
+    )
+
+    register_telemetry_ingest(
+        cast("KafkaBroker", broker), container=cast("AsyncContainer", None), settings=settings
+    )
+
+    assert len(broker.routes) == 1
+    topic, group_id, _auto_offset_reset, _handler = broker.routes[0]
+    assert (topic, group_id) == (TELEMETRY_RAW, "test-telemetry-ingest")
+
+
+def test_the_telemetry_ingress_starts_at_the_live_edge() -> None:
+    """Raw telemetry has no ledger to replay against; the readings table is one."""
+    broker = FakeBroker()
+
+    register_telemetry_ingest(
+        cast("KafkaBroker", broker),
+        container=cast("AsyncContainer", None),
+        settings=Settings(),
+    )
+
+    assert TELEMETRY_INGEST_OFFSET_RESET == "latest"
+    assert broker.routes[0][2] == "latest"
+
+
+def test_the_raw_topic_is_not_in_the_event_catalogue() -> None:
+    """A topic that carries raw sensor JSON must not be taken for an event topic."""
+    assert TELEMETRY_RAW not in set(EVENT_TOPICS.values())

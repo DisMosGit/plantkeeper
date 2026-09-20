@@ -14,6 +14,7 @@ signature.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
@@ -33,6 +34,7 @@ from plantkeeper.domain.identifiers import (
 )
 from plantkeeper.domain.journal.entry import JournalEntry
 from plantkeeper.domain.notifications.notification import Notification
+from plantkeeper.domain.telemetry.reading import TelemetryReading
 from plantkeeper.domain.telemetry.sensor import Sensor
 
 
@@ -149,6 +151,39 @@ class SensorRepository(Repository[Sensor, SensorId], Protocol):
 
     async def list_by_plant(self, plant_id: PlantId) -> list[Sensor]:
         """List the sensors bound to one plant."""
+        ...
+
+
+@runtime_checkable
+class TelemetryRepository(Protocol):
+    """Readings of the Telemetry context.
+
+    Not a :class:`Repository`: a reading is an append-only fact, so there is
+    nothing to load into an aggregate, save over or delete. The two operations
+    here are the ones the telemetry ingress and its readers actually need.
+
+    The table behind this port is keyed by ``(sensor_id, recorded_at)``, and
+    :meth:`add_many` relies on that: a redelivered or replayed reading is skipped
+    by the database rather than by a check the consumer could get wrong.
+    """
+
+    async def add_many(self, readings: Sequence[TelemetryReading]) -> int:
+        """Store readings, skipping ones already stored, and count the new rows.
+
+        The count is rows actually inserted, so a caller can tell a first
+        delivery from a duplicate without a second query.
+        """
+        ...
+
+    async def list_by_plant(
+        self,
+        plant_id: PlantId,
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int = 1000,
+    ) -> list[TelemetryReading]:
+        """List a plant's readings, oldest first, optionally within a window."""
         ...
 
 

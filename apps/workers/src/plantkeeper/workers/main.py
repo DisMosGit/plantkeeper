@@ -6,9 +6,12 @@ other half of that split:
 * the **relay** publishes the outbox;
 * the **saga consumers** subscribe to the topics the relay fills and run the four
   sagas (``docs/sagas.md``);
-* three **background jobs** complete what an event cannot express — the 24-hour
-  missed-care tick, the daily catalogue-sync trigger, and recovery of sagas a crash
-  left unfinished.
+* the **telemetry ingress** consumes ``telemetry.raw``, which is not a domain-event
+  topic: it stores each reading and appends the ``TelemetryReceived`` the sagas
+  then react to (``docs/telemetry.md``);
+* four **background jobs** complete what an event cannot express — the 24-hour
+  missed-care tick, the daily catalogue-sync trigger, recovery of sagas a crash
+  left unfinished, and the partition window of the readings table.
 
 They run as one ``asyncio.gather`` and are stopped in the reverse order they were
 started: every job finishes its current tick, then the broker closes.
@@ -31,7 +34,8 @@ from plantkeeper.infrastructure.scheduling.job import BackgroundJob
 from plantkeeper.infrastructure.scheduling.missed_care import MissedCareScheduler
 from plantkeeper.infrastructure.scheduling.saga_recovery import SagaRecoveryJob
 from plantkeeper.infrastructure.scheduling.species_sync import SpeciesSyncScheduler
-from plantkeeper.workers.consumers import register_consumers
+from plantkeeper.infrastructure.scheduling.telemetry_partitions import TelemetryPartitionJob
+from plantkeeper.workers.consumers import register_consumers, register_telemetry_ingest
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +83,7 @@ def build_background_jobs(
         MissedCareScheduler(container=container, settings=settings),
         SpeciesSyncScheduler(container=container, settings=settings),
         SagaRecoveryJob(container=container, storage=storage, settings=settings),
+        TelemetryPartitionJob(container=container, settings=settings),
     ]
 
 
@@ -93,6 +98,7 @@ async def run(container: AsyncContainer) -> None:
     # Routes must exist before the broker starts: FastStream refuses to add them
     # to a running broker.
     register_consumers(broker, container=container, settings=settings)
+    register_telemetry_ingest(broker, container=container, settings=settings)
 
     loop = asyncio.get_running_loop()
     for received in (signal.SIGINT, signal.SIGTERM):

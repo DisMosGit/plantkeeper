@@ -85,7 +85,8 @@ UNPROJECTED_EVENTS: set[type[DomainEvent]] = {
     # Catalog: a trigger, and a cache concern rather than a read model.
     SpeciesSyncRequested,
     SpeciesCacheInvalidated,
-    # Telemetry has no read model before Phase 5.
+    # Telemetry: the readings table is the write side's own record, and the read
+    # side has no telemetry model until the windowed aggregation of Phase 8.
     TelemetryReceived,
     SoilMoistureLow,
     SoilMoistureHigh,

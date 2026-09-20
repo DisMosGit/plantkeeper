@@ -34,7 +34,11 @@ async def add_sensor(
     idempotency_key: IdempotencyKey = None,
 ) -> SensorResponse:
     """Bind a sensor to an existing plant."""
-    command = AddSensorCommand(plant_id=PlantId(payload.plant_id), idempotency_key=idempotency_key)
+    command = AddSensorCommand(
+        plant_id=PlantId(payload.plant_id),
+        sensor_id=SensorId(payload.sensor_id) if payload.sensor_id is not None else None,
+        idempotency_key=idempotency_key,
+    )
     return SensorResponse.from_view(view_of(await mediator.send(command), SensorView))
 
 

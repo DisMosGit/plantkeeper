@@ -29,6 +29,7 @@ from plantkeeper.application.ports.repositories import (
     PlantRepository,
     SensorRepository,
     SpeciesRepository,
+    TelemetryRepository,
 )
 from plantkeeper.application.ports.sagas import (
     MissedCareWindowRepository,
@@ -64,6 +65,7 @@ from plantkeeper.infrastructure.persistence.repositories.sagas import (
 )
 from plantkeeper.infrastructure.persistence.repositories.telemetry import (
     SqlAlchemySensorRepository,
+    SqlAlchemyTelemetryRepository,
 )
 from plantkeeper.infrastructure.persistence.tracking import AggregateTracker
 
@@ -85,6 +87,7 @@ class SqlAlchemyUnitOfWork:
         self._care_schedules = SqlAlchemyCareScheduleRepository(session, self._tracker)
         self._species = SqlAlchemySpeciesRepository(session, self._tracker)
         self._sensors = SqlAlchemySensorRepository(session, self._tracker)
+        self._telemetry = SqlAlchemyTelemetryRepository(session)
         self._journal_entries = SqlAlchemyJournalEntryRepository(session, self._tracker)
         self._notifications = SqlAlchemyNotificationRepository(session, self._tracker)
         self._outbox = SqlAlchemyOutboxRepository(session)
@@ -117,6 +120,11 @@ class SqlAlchemyUnitOfWork:
     def sensors(self) -> SensorRepository:
         """Sensors, bound to this transaction."""
         return self._sensors
+
+    @property
+    def telemetry(self) -> TelemetryRepository:
+        """Sensor readings, bound to this transaction."""
+        return self._telemetry
 
     @property
     def journal_entries(self) -> JournalEntryRepository:

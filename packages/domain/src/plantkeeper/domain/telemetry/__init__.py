@@ -15,6 +15,7 @@ from plantkeeper.domain.telemetry.events import (
     TelemetryReceived,
     TemperatureAnomaly,
 )
+from plantkeeper.domain.telemetry.reading import TelemetryReading
 from plantkeeper.domain.telemetry.sensor import (
     MOISTURE_HIGH_THRESHOLD,
     MOISTURE_LOW_THRESHOLD,
@@ -38,6 +39,7 @@ __all__ = [
     "SoilMoistureHigh",
     "SoilMoistureLow",
     "TelemetryError",
+    "TelemetryReading",
     "TelemetryReceived",
     "TemperatureAnomaly",
 ]

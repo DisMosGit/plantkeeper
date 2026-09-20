@@ -11,11 +11,18 @@ from plantkeeper.application.views import CollectionView, SensorView
 
 
 class SensorCreate(BaseModel):
-    """The body of ``POST /api/v1/sensors``."""
+    """The body of ``POST /api/v1/sensors``.
+
+    ``sensor_id`` is optional: the server mints one when the client does not own
+    an identifier already. It exists for callers that do — the IoT simulator
+    derives its sensors from a base id it prints, and registering anything else
+    would bind a sensor that never reports.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     plant_id: UUID
+    sensor_id: UUID | None = None
 
 
 class SensorResponse(BaseModel):

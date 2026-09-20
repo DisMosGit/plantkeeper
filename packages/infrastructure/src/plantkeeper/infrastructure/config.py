@@ -67,6 +67,24 @@ class Settings(BaseSettings):
     saga_recovery_stale_after_seconds: float = 60.0
     """Only sagas untouched for this long are recovered, never one mid-step."""
 
+    # --- Telemetry ingress ----------------------------------------------------
+    telemetry_raw_topic: str = "telemetry.raw"
+    """Where the IoT simulator publishes; the only non-event topic besides the DLQ."""
+
+    telemetry_ingest_consumer_group: str = "plantkeeper-telemetry-ingest"
+    """The ingress consumer's group.
+
+    Not prefixed from ``worker_consumer_group_prefix``: every other group is
+    derived from a saga or consumer *class* that the worker enumerates, while this
+    one reads a topic of its own and is named here instead.
+    """
+
+    telemetry_partition_months_ahead: int = 3
+    """How many months past the current one ``sensor_readings`` keeps partitioned."""
+
+    telemetry_partition_check_interval_seconds: float = 86400.0
+    """How often the partition job looks for a month that is about to need one."""
+
     @property
     def postgres_dsn(self) -> str:
         """The SQLAlchemy URL of the write database.

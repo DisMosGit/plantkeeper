@@ -26,7 +26,10 @@ from plantkeeper.infrastructure.persistence.models.shared import (
     SagaLogModel,
     SagaStateModel,
 )
-from plantkeeper.infrastructure.persistence.models.telemetry import SensorModel
+from plantkeeper.infrastructure.persistence.models.telemetry import (
+    SensorModel,
+    SensorReadingModel,
+)
 
 __all__ = (
     "CareScheduleModel",
@@ -41,5 +44,6 @@ __all__ = (
     "SagaLogModel",
     "SagaStateModel",
     "SensorModel",
+    "SensorReadingModel",
     "SpeciesModel",
 )

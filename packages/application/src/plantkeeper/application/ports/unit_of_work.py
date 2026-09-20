@@ -24,6 +24,7 @@ from plantkeeper.application.ports.repositories import (
     PlantRepository,
     SensorRepository,
     SpeciesRepository,
+    TelemetryRepository,
 )
 from plantkeeper.application.ports.sagas import (
     MissedCareWindowRepository,
@@ -59,6 +60,17 @@ class UnitOfWork(Protocol):
     @property
     def sensors(self) -> SensorRepository:
         """Sensors, bound to this transaction's session."""
+        ...
+
+    @property
+    def telemetry(self) -> TelemetryRepository:
+        """Sensor readings, bound to this transaction's session.
+
+        The telemetry ingress writes readings here and appends the
+        ``TelemetryReceived`` they produce to the outbox in the same transaction,
+        so a stored reading and the event announcing it appear together or not at
+        all.
+        """
         ...
 
     @property

@@ -16,9 +16,17 @@ CREATED = 201
 
 
 class AddSensorCommand(IdempotentCommand):
-    """Bind a sensor to a plant. Replayable through ``Idempotency-Key``."""
+    """Bind a sensor to a plant. Replayable through ``Idempotency-Key``.
+
+    ``sensor_id`` is optional and normally left to the server: the identity of a
+    sensor is the write side's to mint. It is accepted so that a caller which
+    already owns the identifier — the IoT simulator derives a run's sensors from a
+    base id it prints — can register exactly the sensor whose telemetry it will
+    publish, instead of registering a sensor nobody will ever hear from.
+    """
 
     plant_id: PlantId
+    sensor_id: SensorId | None = None
 
 
 class AddSensorHandler(CommandHandler[AddSensorCommand, SensorView]):
@@ -43,7 +51,11 @@ class AddSensorHandler(CommandHandler[AddSensorCommand, SensorView]):
         plant = await self._uow.plants.get(command.plant_id)
         if plant is None:
             raise NotFoundError(f"plant {command.plant_id} does not exist")
-        sensor = Sensor.register(plant_id=command.plant_id, added_at=self._clock.now())
+        sensor = Sensor.register(
+            plant_id=command.plant_id,
+            added_at=self._clock.now(),
+            sensor_id=command.sensor_id,
+        )
         await self._uow.sensors.add(sensor)
         return SensorView.from_domain(sensor)
 

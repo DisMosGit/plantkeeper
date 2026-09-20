@@ -48,6 +48,7 @@ from plantkeeper.application.ports.repositories import (
     PlantRepository,
     SensorRepository,
     SpeciesRepository,
+    TelemetryRepository,
 )
 from plantkeeper.application.ports.unit_of_work import UnitOfWork
 from plantkeeper.application.queries.care import GetTodayCareQueryHandler
@@ -83,6 +84,7 @@ from plantkeeper.application.sagas.species_sync import (
     SpeciesSyncSaga,
     SpeciesSyncTrigger,
 )
+from plantkeeper.application.telemetry.ingest import TelemetryIngestConsumer
 from plantkeeper.infrastructure.clock import SystemClock
 from plantkeeper.infrastructure.config import Settings
 from plantkeeper.infrastructure.messaging.broker import build_broker
@@ -106,6 +108,7 @@ from plantkeeper.infrastructure.persistence.repositories.notifications import (
 )
 from plantkeeper.infrastructure.persistence.repositories.telemetry import (
     SqlAlchemySensorRepository,
+    SqlAlchemyTelemetryRepository,
 )
 from plantkeeper.infrastructure.persistence.saga_storage import SqlAlchemySagaStorage
 from plantkeeper.infrastructure.persistence.tracking import AggregateTracker
@@ -233,6 +236,15 @@ class RepositoryProvider(Provider):
         return SqlAlchemySensorRepository(session, tracker)
 
     @provide(scope=Scope.REQUEST)
+    def telemetry(self, session: AsyncSession) -> TelemetryRepository:
+        """Expose the readings of the request's session.
+
+        No tracker: a reading is an append-only fact, not an aggregate that could
+        record an event.
+        """
+        return SqlAlchemyTelemetryRepository(session)
+
+    @provide(scope=Scope.REQUEST)
     def journal_entries(
         self, session: AsyncSession, tracker: AggregateTracker
     ) -> JournalEntryRepository:
@@ -298,11 +310,19 @@ SAGA_COMPONENT_TYPES = (
     # Choreography
     AdaptiveWateringSaga,
     MissedCareSaga,
+    # Ingress
+    TelemetryIngestConsumer,
     # Triggers
     OnboardPlantTrigger,
     SpeciesSyncTrigger,
 )
-"""Every saga, step handler and consumer, in the order the registry lists them."""
+"""Every saga, step handler and consumer, in the order the registry lists them.
+
+``TelemetryIngestConsumer`` is here even though it is not in the application's
+saga registry: it reads a raw topic rather than a domain event, so the worker
+subscribes it explicitly, but it still needs the request scope's session and
+repositories to do its work.
+"""
 
 
 class SagaProvider(Provider):

@@ -24,14 +24,21 @@ pytestmark = pytest.mark.integration
 
 
 async def existing_tables(dsn: str) -> set[str]:
-    """Return the ``schema.table`` names the write side owns."""
+    """Return the ``schema.table`` names the write side owns.
+
+    Partitions are excluded: ``sensor_readings`` is a partitioned parent
+    (``relkind = 'p'``), and its monthly children are created by a maintenance job
+    rather than by a model, so they are not what "the modelled tables" means.
+    """
     engine = create_async_engine(dsn)
     try:
         async with engine.connect() as connection:
             result = await connection.execute(
                 text(
-                    "SELECT schemaname || '.' || tablename FROM pg_tables "
-                    "WHERE schemaname LIKE 'write\\_%'"
+                    "SELECT n.nspname || '.' || c.relname FROM pg_class AS c "
+                    "JOIN pg_namespace AS n ON n.oid = c.relnamespace "
+                    "WHERE c.relkind IN ('r', 'p') AND NOT c.relispartition "
+                    "AND n.nspname LIKE 'write\\_%'"
                 )
             )
             return {row[0] for row in result}
@@ -55,9 +62,8 @@ async def test_the_migrations_create_exactly_the_modelled_tables(postgres_dsn: s
 
     await asyncio.to_thread(command.upgrade, config, "head")
 
-    assert await existing_tables(postgres_dsn) == {
-        f"{table.schema}.{table.name}" for table in Base.metadata.sorted_tables
-    }
+    expected = {f"{table.schema}.{table.name}" for table in Base.metadata.sorted_tables}
+    assert await existing_tables(postgres_dsn) == expected
 
 
 async def test_upgrading_twice_is_a_no_op(postgres_dsn: str) -> None:

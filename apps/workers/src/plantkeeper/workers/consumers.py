@@ -3,7 +3,9 @@
 The read side has its own registration module
 (``plantkeeper.admin.projections.subscriber``) because its consumers talk to
 Django. This one registers the write side's: every saga consumer, each with its
-own group id and its own ``(consumer_group, event_id)`` ledger domain.
+own group id and its own ``(consumer_group, event_id)`` ledger domain, plus the
+telemetry ingress, which is the one subscriber that does not read a domain event
+(see :func:`register_telemetry_ingest`).
 
 Registration must happen **before** ``broker.start()``: FastStream refuses to add
 routes to a running broker.
@@ -19,6 +21,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from typing import Final, cast
 
 from cqrs.dispatcher.saga import SagaDispatcher
 from cqrs.requests.map import SagaMap
@@ -28,6 +31,7 @@ from faststream.kafka import KafkaBroker, KafkaMessage
 
 from plantkeeper.application.sagas.consumer import Consumer
 from plantkeeper.application.sagas.registry import CONSUMER_TYPES, TRIGGER_TYPES
+from plantkeeper.application.telemetry.ingest import TelemetryIngestConsumer
 from plantkeeper.domain.base import DomainEvent
 from plantkeeper.infrastructure.config import Settings
 from plantkeeper.infrastructure.di.cqrs import DishkaCQRSContainer
@@ -37,6 +41,16 @@ from plantkeeper.infrastructure.messaging.topics import EVENT_TOPICS
 logger = logging.getLogger(__name__)
 
 ConsumerSubscriber = Callable[[KafkaMessage], Awaitable[None]]
+
+TELEMETRY_INGEST_OFFSET_RESET: Final = "latest"
+"""Where the ingress starts when its group has no committed offset.
+
+``latest``, unlike the sagas' ``earliest``: a saga replays from the beginning
+because its ledger makes that a safe rebuild, while raw telemetry has no ledger —
+the readings table is its ledger — and replaying an old log would re-insert rows
+nobody asked for. A fresh group therefore starts at the live edge, which is what
+an operator running the simulator expects to see.
+"""
 
 
 def topics_for(events: tuple[type[DomainEvent], ...]) -> tuple[str, ...]:
@@ -103,3 +117,39 @@ async def build_saga_dispatcher(request_container: AsyncContainer) -> SagaDispat
     saga_map = await request_container.get(SagaMap)
     storage = await request_container.get(ISagaStorage)
     return SagaDispatcher(saga_map, DishkaCQRSContainer(request_container), storage)
+
+
+def register_telemetry_ingest(
+    broker: KafkaBroker, *, container: AsyncContainer, settings: Settings
+) -> None:
+    """Attach the telemetry ingress to the raw topic.
+
+    Separate from :func:`register_consumers` because the two subscriptions are
+    derived from different things: a saga names the *events* it handles and the
+    worker looks their topics up, while this consumer reads a topic that is not in
+    the event catalogue at all. Keeping them apart is what stops the next reader
+    from concluding that ``telemetry.raw`` is a domain-event topic.
+    """
+    broker.subscriber(
+        settings.telemetry_raw_topic,
+        group_id=settings.telemetry_ingest_consumer_group,
+        auto_offset_reset=TELEMETRY_INGEST_OFFSET_RESET,
+    )(build_telemetry_ingest_handler(container=container))
+
+
+def build_telemetry_ingest_handler(*, container: AsyncContainer) -> ConsumerSubscriber:
+    """Return the FastStream handler that feeds one raw delivery to the ingress."""
+
+    async def handle(message: KafkaMessage) -> None:
+        """Hand the raw body to the ingress inside its own request scope."""
+        # ``StreamMessage`` assigns ``body`` in ``__init__`` without annotating it,
+        # so the declared type is unknown; a Kafka delivery's body is the bytes
+        # the producer sent.
+        payload = cast("bytes", message.body)
+        async with container() as request_container:
+            consumer = await request_container.get(TelemetryIngestConsumer)
+            stored = await consumer.ingest(payload)
+            if not stored:
+                logger.debug("telemetry delivery was dropped rather than stored")
+
+    return handle
