@@ -164,7 +164,10 @@ decisions rather than oversights:
 - `SpeciesSyncRequested`, `SpeciesCacheInvalidated` — a trigger and a cache
   concern, not read models.
 - `TelemetryReceived`, `SoilMoistureLow`, `SoilMoistureHigh`, `TemperatureAnomaly`,
-  `SensorOffline` — telemetry projections land in Phase 5.
+  `SensorOffline` — still deferred past Phase 8: telemetry is consumed by the sagas and
+  the notification consumer, and stored in `write_telemetry.sensor_readings`, but no
+  projection reads the topic yet. [`docs/telemetry.md`](telemetry.md) records the same
+  limit from the write side.
 
 `species`/`plants.species_name` used to be in that list: it was built in Phase 3
 before it had a producer, and since Phase 9 the Trefle synchronisation publishes

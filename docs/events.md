@@ -7,7 +7,10 @@
 > and its consumers are the read side's projections
 > ([`docs/cqrs.md`](cqrs.md)), the write side's sagas
 > ([`docs/sagas.md`](sagas.md)) and the telemetry ingress
-> ([`docs/telemetry.md`](telemetry.md)). Every event now has a producer.
+> ([`docs/telemetry.md`](telemetry.md)). `SensorOffline` is the one exception on both
+> counts: nothing raises it and no consumer handles it, which the generated
+> [`docs/diagrams/event-flow.md`](diagrams/event-flow.md) states under "no consumer at
+> all". Every other event has a producer.
 >
 > The catalogue is also exported in machine-readable form: the
 > `x-plantkeeper-event-catalogue` extension of `docs/asyncapi-write.json` and
@@ -95,7 +98,9 @@ projection (`<READ_SIDE_CONSUMER_GROUP_PREFIX>-garden`, `…-care`, `…-catalog
 makes a rebuilt read table possible. The write side runs one group per consumer
 (`<WORKER_CONSUMER_GROUP_PREFIX>-onboard-plant`, `…-adaptive-watering`,
 `…-missed-care`, `…-species-sync`, `…-species-cache`, `…-notifications`,
-`…-journal-entries`). A consumer that meets an unknown
+`…-notification-push`, `…-journal-entries`), plus the telemetry ingress on its own
+group (`plantkeeper-telemetry-ingest`, described below) — nine groups in the one
+`make workers` process. A consumer that meets an unknown
 `event_name`, or a body that does not validate, logs it with the `event_id` and
 acknowledges it rather than blocking the partition behind a contract violation.
 
@@ -145,7 +150,7 @@ write side's ([`docs/sagas.md`](sagas.md)).
 
 | Event | Payload | Emitted by | Consumed by |
 |-------|---------|-----------|-------------|
-| `JournalEntryAdded` | `entry_id`, `plant_id`, `entry_type`, `note`, `entry_occurred_at` | `JournalEntry` (`add`) | `JournalProjection`; Analytics |
+| `JournalEntryAdded` | `entry_id`, `plant_id`, `entry_type`, `note`, `entry_occurred_at` | `JournalEntry` (`add`) | `JournalProjection` (the `journal_entries` read model) |
 
 `entry_occurred_at` is when the care happened; the inherited `occurred_at` is when
 the entry was recorded.
@@ -164,7 +169,7 @@ moment is the event's `completed_at`.
 | `SoilMoistureLow` | `sensor_id`, `plant_id`, `moisture`, `threshold` | `Sensor` (`record`), called by the telemetry ingress | `NotificationConsumer` |
 | `SoilMoistureHigh` | `sensor_id`, `plant_id`, `moisture`, `threshold` | `Sensor` (`record`), called by the telemetry ingress | `AdaptiveWateringSaga` |
 | `TemperatureAnomaly` | `sensor_id`, `plant_id`, `temperature`, `low_threshold`, `high_threshold` | `Sensor` (`record`), called by the telemetry ingress | `NotificationConsumer` |
-| `SensorOffline` | `sensor_id`, `plant_id`, `last_seen_at`, `offline_for` | `Sensor` (`mark_offline`) | Notifications (no producer yet) |
+| `SensorOffline` | `sensor_id`, `plant_id`, `last_seen_at`, `offline_for` | `Sensor` (`mark_offline`) | nobody — no producer and no consumer yet |
 
 `TelemetryReceived` is the one catalogued event with no aggregate behind it: a reading is
 an append-only fact, so nothing raises it for the aggregate to own — the ingress appends
@@ -174,6 +179,13 @@ events *are* raised by the aggregate: since Phase 8 the ingress calls
 same outbox rowset. The sensor's own state change (`last_seen_at`) is not persisted —
 that stays Phase 5's decision. `SensorOffline` still has no caller: it needs a silence
 timer, which no phase has built.
+
+Every consumer in the table above is on the write side: the read side's five projections
+subscribe to `garden.events`, `care.events`, `catalog.events`, `notifications.events` and
+`journal.events`, and none of them reads `telemetry.events`. A telemetry fact therefore
+reaches the sagas and the notification consumer, and stops there —
+[`docs/cqrs.md`](cqrs.md) keeps the list of what is deliberately unprojected, and
+[`docs/telemetry.md`](telemetry.md) states the same limit from the ingress's side.
 
 ### Notifications
 

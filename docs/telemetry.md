@@ -16,7 +16,15 @@ worth being explicit about how far the raw stream travels:
 | Topic | Message | Produced by | Consumed by |
 |-------|---------|-------------|-------------|
 | `telemetry.raw` | a raw measurement: `sensor_id`, `recorded_at`, `moisture`, `temperature`, `light` | the IoT simulator, directly | the telemetry ingress |
-| `telemetry.events` | the `TelemetryReceived` / `SoilMoistureLow` / `SoilMoistureHigh` / `TemperatureAnomaly` / `SensorOffline` domain events | the outbox relay | `AdaptiveWateringSaga`, `NotificationConsumer`, the read side |
+| `telemetry.events` | the `TelemetryReceived` / `SoilMoistureLow` / `SoilMoistureHigh` / `TemperatureAnomaly` / `SensorOffline` domain events | the outbox relay | `AdaptiveWateringSaga`, `NotificationConsumer` |
+
+Neither topic has a read-side consumer: the five projections subscribe to
+`garden.events`, `care.events`, `catalog.events`, `notifications.events` and
+`journal.events`, and none of them touches `telemetry.events`, so nothing a sensor
+reports reaches a `read_analytics` table. That is the same deliberate gap
+[`docs/cqrs.md`](cqrs.md) lists under "What is not projected yet", and
+`tests/integration/test_projections.py` names the events so it stays a decision rather
+than an oversight.
 
 `telemetry.raw` is **not** an event topic. It is not in
 `plantkeeper.infrastructure.messaging.topics.EVENT_TOPICS`, nothing in the event

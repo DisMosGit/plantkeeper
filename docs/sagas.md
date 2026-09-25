@@ -39,6 +39,28 @@ does any work it claims `(consumer_group, event_id)` in
 `write_shared.processed_events`; the claim commits with the work, so a redelivery
 is a no-op and a failure releases the claim for the retry.
 
+**A saga writes the way the API does, not through the API.** Its steps are plain
+application-layer handlers, so a step that changes the domain goes through the same
+`UnitOfWork` as an HTTP command — repositories over the request's session, one commit —
+and the events it produces land in the outbox of that commit, which the relay then
+publishes. There is no command port and no round trip through `make api`: the
+orchestration sagas run inside the `make workers` process and share the application
+layer with the API, which is the design [ADR 0005](adr/0005-orchestration-vs-choreography.md)
+chose. What a saga *does* own separately is its own progress: `SagaStarted`,
+`SagaCompleted`, `SagaFailed` and `SagaCompensated` go to the outbox like any other
+event, while the engine's execution row and step log are committed by the saga storage
+in a session of its own, outside the unit of work — the crash window is listed under
+*Known limitations* below.
+
+No consumer writes another context's tables — every mutation goes through the shared
+`UnitOfWork`, so a saga's writes stay in the contexts it owns (`write_care`,
+`write_notifications`, `write_catalog`). Reading across a boundary is the one place the
+shared session is used directly: the notification and journal consumers resolve a
+`plant_id` from the Garden tables, and the onboarding saga reads the catalogue through
+its `SpeciesCatalog` port, which is a local read of `write_catalog` rather than a call
+into another context. Everything else travels as an event; `docs/architecture.md` treats
+that catalogue lookup as the project's one documented exception.
+
 ## OnboardPlantSaga — orchestration
 
 Trigger: `PlantAdded`. Deterministic id: `uuid5("OnboardPlantSaga:<plant_id>")`.
@@ -217,9 +239,11 @@ contract, the mapping and the cache.
 
 ## Running it
 
-`make workers` runs everything in one process: the outbox relay, the four consumer
-groups, the missed-care tick, the daily catalogue trigger and the recovery job.
-Relevant settings (see `.env.example`):
+`make workers` runs the whole write-side back end in one process: the outbox relay, the
+eight write-side consumer groups (the two orchestration triggers and the six
+choreography consumers), the telemetry ingress on `telemetry.raw`, and the four timers —
+the missed-care tick, the daily catalogue trigger, the saga recovery job and the
+readings table's partition window. Relevant settings (see `.env.example`):
 
 | Setting | Default | Meaning |
 |---------|---------|---------|
