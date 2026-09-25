@@ -69,7 +69,9 @@ nothing, and `SagaMediator.stream` does not surface the dispatched saga's id.
 4. **Saga identity is deterministic**: `uuid5(saga_name, correlation_id)`, where
    the correlation is the plant (onboarding) or the trigger event (species sync).
    A redelivered `PlantAdded` therefore resumes its saga instead of starting a
-   second one, and a finished saga is a no-op.
+   second one — when the redelivery reaches the dispatch at all: a claim committed
+   by an earlier step stops it, and `SagaRecoveryJob` is what resumes such a saga —
+   and a finished saga is a no-op.
 
 5. **Lifecycle events are the application's job.** `SagaStarted`, `SagaCompleted`,
    `SagaFailed` and `SagaCompensated` are appended to the transactional outbox by

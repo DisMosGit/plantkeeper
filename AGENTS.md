@@ -22,8 +22,8 @@ Guidance for AI coding agents working in this repository.
 - `packages/application` — commands, queries, sagas, ports
 - `packages/infrastructure` — persistence, messaging, external, cache, DI
 - `apps/api` — FastAPI REST + gRPC servicers
-- `apps/admin` — ASGI Django read models
-- `apps/workers` — FastStream consumers
+- `apps/admin` — read-side projection consumers + ASGI Django read models
+- `apps/workers` — write-side FastStream consumers (outbox relay, saga consumers, timers)
 - `tools/iot-simulator` — Kafka telemetry generator
 - `proto/` — gRPC definitions
 - `docs/` — architecture, domain, ADRs, runbooks
@@ -33,7 +33,9 @@ Guidance for AI coding agents working in this repository.
 - Domain layer is pure: no imports from infrastructure, FastAPI, Django, or SQLAlchemy.
 - All cross-context communication goes through Kafka events, never direct imports.
 - Every write use case goes through Unit of Work + Transactional Outbox.
-- Every Kafka consumer must be idempotent on `(consumer_group, event_id)`.
+- Every Kafka consumer must be idempotent on `(consumer_group, event_id)`. The telemetry
+  ingress is the one documented exception: it keeps no ledger and is idempotent on the
+  readings key `(sensor_id, recorded_at)` instead (`docs/telemetry.md`).
 - Schemas: Pydantic v2 for events, protobuf for gRPC. No dataclass payloads across boundaries.
 - Type hints are mandatory. `mypy --strict` must pass.
 - No `Any`, no `# type: ignore` without a comment explaining why.

@@ -32,6 +32,25 @@ Versioning: [Semantic Versioning](https://semver.org/).
   `telemetry.events` (there is none — the gap is listed in `docs/cqrs.md`) or a
   `NotificationConsumer` for `SensorOffline` (it handles neither), and `docs/events.md`
   now lists the `…-notification-push` consumer group that the code runs.
+- The README architecture diagram no longer implies two databases or two commits: one
+  Postgres node lists `write_*` and `write_shared` (outbox, saga_state, saga_log,
+  processed_events, idempotency_keys), the `UnitOfWork` edge is labelled "one commit, one
+  transaction", the node names the command-handler layer, the saga edge is labelled
+  `commands`, the read side shows its own `read_analytics.processed_events` ledger and the
+  claim edge, Django Admin is labelled read-only, the API's query reads and the timer jobs
+  appear, and `ANALYTICS` sits inside the read subgraph. The prose now counts nine worker
+  consumer groups (eight write-side plus the telemetry ingress), names all six
+  choreography consumers, and states that the README sketch is not drift-tested (only the
+  generated diagrams are).
+- The "a handler failure releases the claim so the retry starts from nothing" invariant is
+  corrected where the code diverges from it: an orchestration trigger that records a saga
+  failure (`Saga._record_failure`) commits the `processed_events` claim along with
+  `SagaFailed`, so the redelivery stops at the claim and the `failed` saga is left for an
+  operator (`application/sagas/consumer.py`, `application/sagas/base.py`,
+  `docs/sagas.md`, ADR 0005, ADR 0008).
+- `AGENTS.md` now records the telemetry ingress's idempotency exception (the readings key
+  `(sensor_id, recorded_at)`, no ledger) and places the read-side projection consumers in
+  `apps/admin`, where the code runs them.
 
 ### Security
 -

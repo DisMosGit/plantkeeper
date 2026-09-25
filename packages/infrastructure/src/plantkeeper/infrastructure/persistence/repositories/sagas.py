@@ -50,7 +50,9 @@ class SqlAlchemyProcessedEventRepository:
         """Insert the delivery, answering ``True`` only for the first one.
 
         The insert is not flushed or committed here: it belongs to the caller's
-        transaction, so a handler that fails releases the claim with it.
+        transaction, so a handler that fails releases the claim with it — unless
+        the caller commits on its failure path (a saga trigger recording
+        ``SagaFailed`` does), which is what makes a recorded saga failure final.
         """
         statement = (
             insert(ProcessedEventModel)

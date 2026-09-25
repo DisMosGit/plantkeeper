@@ -9,8 +9,12 @@ and it follows the same two rules:
   claimed in ``write_shared.processed_events`` before any work happens. A second
   delivery of the same event in the same group stops at the claim.
 * **The claim and the handler commit together.** One transaction makes a crash
-  after the claim a no-op on redelivery, and a handler failure releases the claim
-  so the retry starts from nothing.
+  after the claim a no-op on redelivery, and a handler failure normally rolls the
+  claim back with the work, so the retry starts from nothing. The one exception is
+  an orchestration trigger whose saga failed: the failure record is committed on
+  purpose (``Saga._record_failure``) and takes the claim with it, so the
+  redelivery stops at the claim and the ``failed`` saga is left for an operator
+  instead of being retried into its terminal state.
 
 The difference from a projection is what the handler does: it may publish
 follow-up events to the outbox, and for the orchestration sagas it dispatches a

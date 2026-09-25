@@ -37,7 +37,11 @@ Every consumer subscribes with a group of its own
 `…-missed-care`, `…-species-sync`) and `auto_offset_reset="earliest"`. Before it
 does any work it claims `(consumer_group, event_id)` in
 `write_shared.processed_events`; the claim commits with the work, so a redelivery
-is a no-op and a failure releases the claim for the retry.
+is a no-op. A handler failure that rolls back releases the claim and the retry
+starts from nothing — with one exception: when an orchestration saga fails, its
+`SagaFailed` record is committed and takes the claim with it, so the redelivery is
+again a no-op and the `failed` saga is left for an operator (see *Known
+limitations* below).
 
 **A saga writes the way the API does, not through the API.** Its steps are plain
 application-layer handlers, so a step that changes the domain goes through the same
@@ -256,6 +260,12 @@ readings table's partition window. Relevant settings (see `.env.example`):
 
 ## Known limitations
 
+- A recorded saga failure is final. `SagaFailed` is committed from the same
+  transaction as the delivery's `processed_events` claim, so the trigger's
+  redelivery stops at the claim instead of retrying; the engine leaves the saga
+  `failed`, which neither redelivery nor `SagaRecoveryJob` (it only picks up
+  `running`/`compensating` rows) re-runs. Only a crash *without* a recorded
+  failure is resumed — by `SagaRecoveryJob`.
 - Compensating a step that published an event cannot recall the message. The
   onboarding sequence publishes last for that reason; a compensated onboarding can
   leave a stale read-side care row until the read model is rebuilt

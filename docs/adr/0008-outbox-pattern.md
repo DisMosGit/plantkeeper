@@ -48,16 +48,20 @@ that table with its own session, publishes each row, commits per row, and after
 `original_topic` and `error` headers. The relay is the **only** producer on the write
 side; no router, handler or repository may call the broker.
 
-**The consuming half.** Every consumer — a write-side `Consumer`, a saga trigger, a
-read-side `Projection`, the telemetry ingress — claims the delivery in a ledger
-before doing any work, *in the same transaction as the work*:
+**The consuming half.** Every consumer that has a ledger — a write-side `Consumer`,
+a saga trigger, a read-side `Projection` — claims the delivery before doing any
+work, *in the same transaction as the work* (the telemetry ingress keeps no ledger;
+its guard is the readings key, below):
 
 - `write_shared.processed_events(consumer_group, event_id)` for the worker;
 - `read_analytics.processed_events(consumer_group, event_id)` for the read side
   (owned by Django, because the read schema is).
 
-A second delivery finds the row and stops. A failure rolls the claim back with the
-work, so the retry starts from nothing. The ledger key is `(consumer_group, event_id)`
+A second delivery finds the row and stops. A failure normally rolls the claim back
+with the work, so the retry starts from nothing — the exception being a saga trigger
+that recorded its saga's failure: `SagaFailed` is committed with the claim and the
+`failed` saga is not retried (ADR 0005, `docs/sagas.md`). The ledger key is
+`(consumer_group, event_id)`
 and never `event_id` alone: a rebuilt consumer group with a lost ledger is a real
 scenario, and two consumers of the same event are the normal case.
 

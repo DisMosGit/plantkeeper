@@ -9,8 +9,9 @@ deliberately leaves to the application:
 * **an event trigger** — a saga in this project starts from a domain event, so
   :meth:`Saga.handle_event` maps one to a context and dispatches it;
 * **a deterministic identity** — :meth:`Saga.saga_id_for` derives the saga id from
-  the aggregate it concerns, so a redelivered ``PlantAdded`` resumes its saga
-  instead of starting a second one;
+  the aggregate it concerns, so the same trigger always addresses the same saga: a
+  redelivery that reaches the dispatch resumes it instead of starting a second one,
+  and a finished saga is a no-op;
 * **lifecycle events** — ``SagaStarted``/``SagaCompleted``/``SagaFailed``/
   ``SagaCompensated`` are appended to the outbox so a saga is observable in the
   event stream and not only in ``write_shared.saga_state``.
@@ -112,8 +113,11 @@ class Saga(CqrsSaga, ABC):
         """Derive a stable saga id from the correlation.
 
         Deterministic rather than random: the same trigger always addresses the
-        same saga, so a redelivery resumes it (skipping completed steps) and a
-        replay of a finished one does nothing.
+        same saga, so a redelivery that reaches the dispatch resumes it (skipping
+        the steps the log already records) and a replay of a finished one does
+        nothing. Once a step has committed, the delivery's ``processed_events``
+        claim was committed with it and stops the redelivery there; what resumes
+        such a saga is ``SagaRecoveryJob``, not the redelivery.
         """
         return uuid5(NAMESPACE_URL, f"{self.saga_name}:{self.correlation_id(context)}")
 
@@ -128,9 +132,11 @@ class Saga(CqrsSaga, ABC):
 
         Returns ``False`` when the event is not a trigger or the saga already
         completed; otherwise dispatches the steps and appends a lifecycle event.
-        A failure compensates inside the engine, is recorded as ``SagaFailed``
-        (plus ``SagaCompensated`` when a step was rolled back) and is re-raised so
-        the Kafka delivery is retried.
+        A failure compensates inside the engine and is recorded as ``SagaFailed``
+        (plus ``SagaCompensated`` when a step was rolled back) before being
+        re-raised. The redelivery that re-raise provokes stops at the delivery's
+        claim — the recording commit took the claim along — so a recorded failure
+        is final: the saga stays ``failed`` for an operator.
         """
         if not self.handles(event):
             return False
@@ -150,7 +156,8 @@ class Saga(CqrsSaga, ABC):
         await unit_of_work.outbox.append(SagaCompleted(saga_id=saga_id, saga_name=self.saga_name))
         # Committed here rather than left to the caller, so completion is durable
         # even if the caller only commits for the claim (which is what
-        # ``Consumer.consume`` does). Symmetric with the failure path below.
+        # ``Consumer.consume`` does): this commit carries the claim as well.
+        # Symmetric with the failure path below.
         await unit_of_work.commit()
         return True
 
@@ -169,8 +176,12 @@ class Saga(CqrsSaga, ABC):
 
         The engine finishes compensating before it re-raises, so the step history
         already shows whether anything was rolled back. The events are committed
-        here rather than left to the caller: the caller's transaction is about to
-        be rolled back with the exception.
+        here rather than left to the caller, whose transaction would be rolled
+        back with the exception. That commit also makes the delivery's
+        ``processed_events`` claim durable, so the redelivery stops at the claim:
+        a recorded failure is final, and neither redelivery nor
+        ``SagaRecoveryJob`` (which only picks up ``running``/``compensating``)
+        re-runs the ``failed`` saga.
         """
         await unit_of_work.outbox.append(
             SagaFailed(saga_id=saga_id, saga_name=self.saga_name, error=str(error))

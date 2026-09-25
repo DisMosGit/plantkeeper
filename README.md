@@ -12,34 +12,37 @@ glued together with **Transactional Outbox**, **Idempotent Consumers**, **Sagas*
 flowchart LR
   subgraph write [Write side]
     API["REST + gRPC<br/>make api, make grpc"]
-    UOW["UnitOfWork<br/>aggregate + outbox, one commit"]
+    UOW["Command handlers + UnitOfWork<br/>aggregate + outbox + claim, one commit"]
     RELAY["OutboxRelay<br/>make workers"]
-    SAGA["Sagas + write-side consumers<br/>make workers"]
+    SAGA["Sagas + write-side consumers + timer jobs<br/>make workers"]
   end
-  DB[("Postgres write_*<br/>domain tables")]
-  SHARED[("write_shared<br/>outbox, saga_state, processed_events")]
+  PG[("Postgres, one instance<br/>write_*: domain tables<br/>write_shared: outbox, saga_state, saga_log,<br/>processed_events, idempotency_keys")]
   K(["Kafka<br/>one topic per context + telemetry.raw"])
   IOT["IoT simulator<br/>make iot"]
   subgraph read [Read side]
     PROJ["Projections<br/>make admin"]
-    ADMIN["Django Admin<br/>make admin"]
+    ANALYTICS[("read_analytics<br/>read models + processed_events")]
+    ADMIN["Django Admin<br/>make admin, read-only"]
   end
-  ANALYTICS[("read_analytics")]
-  API --> UOW --> DB
-  UOW --> SHARED
-  RELAY -->|poll the outbox| SHARED
+  API --> UOW
+  API -.->|queries| PG
+  UOW -->|"one commit, one transaction"| PG
+  RELAY -->|poll the outbox| PG
   RELAY --> K
   K --> SAGA
-  SAGA --> UOW
-  SAGA -.->|saga state, own session| SHARED
+  SAGA -->|commands| UOW
+  SAGA -.->|"saga_state + saga_log, own session"| PG
   IOT -->|telemetry.raw| K
-  K --> PROJ --> ANALYTICS
+  K --> PROJ
+  PROJ -->|"claim + project, one commit"| ANALYTICS
   ADMIN -->|reads| ANALYTICS
 ```
 
-The generated, always-current versions of this picture are
+This sketch is a hand-drawn summary and is deliberately not test-guarded. The
+generated, always-current versions of it are
 [`docs/diagrams/event-flow.md`](docs/diagrams/event-flow.md) (every event edge) and
-[`docs/diagrams/sagas.md`](docs/diagrams/sagas.md) (the orchestration sagas' steps).
+[`docs/diagrams/sagas.md`](docs/diagrams/sagas.md) (the orchestration sagas' steps);
+those two are rendered from the code and `tests/unit/docs` fails when they drift.
 
 ## Stack
 
@@ -96,11 +99,12 @@ The system runs as three deployables on purpose. `make api` answers HTTP and com
 each command together with the events it produced into the outbox; `make grpc` is a
 second, typed surface over the same application layer (see
 [`docs/grpc.md`](docs/grpc.md)). `make workers` holds the whole write-side back end in
-**one** process: the relay that publishes the outbox to Kafka, the eight consumer
-groups — the telemetry ingress that turns `telemetry.raw` into readings and events,
-the two orchestration triggers, the six choreography consumers (the sagas, the
-notification producers and the pusher) — and their timers (the missed-care tick, the
-daily catalogue trigger, saga recovery and the readings table's partition window).
+**one** process: the relay that publishes the outbox to Kafka, the eight write-side
+consumer groups — the two orchestration triggers and the six choreography consumers
+(the two choreography sagas, the journal recorder, the two notification consumers and
+the catalogue cache's invalidator) — plus the telemetry ingress, a ninth group that
+turns `telemetry.raw` into readings and events, and their timers (the missed-care tick,
+the daily catalogue trigger, saga recovery and the readings table's partition window).
 `make admin` is likewise **one** process: the Kafka consumer that projects events into
 the `read_analytics` schema, plus Django Admin served over it, so the read side is
 never serving a stale page while its projections are down. Nothing in either API
@@ -178,9 +182,9 @@ an `x-plantkeeper-event-catalogue` extension. That catalogue is generated once, 
 admin process — the only generator with Django configured, and therefore the only one
 that can name both consumer sets — and handed to the worker's generator, so neither
 document reports a read-side-only event as consumed by nobody. The JSON documents are
-gitignored build products (like the gRPC stubs); the Mermaid diagrams are committed so
-GitHub renders them, and `tests/unit/contracts` plus `tests/unit/docs` fail when either
-drifts from the code.
+gitignored build products (like the gRPC stubs); the two generated Mermaid diagrams are
+committed so GitHub renders them, and `tests/unit/contracts` plus `tests/unit/docs` fail
+when either drifts from the code.
 
 ## Documentation
 
