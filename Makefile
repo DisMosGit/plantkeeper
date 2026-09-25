@@ -88,11 +88,11 @@ admin: admin-static ## Run the read side (projections + Django Admin) on :8001
 workers: ## Run the write-side workers: outbox relay, saga consumers and their timers
 	uv run python -m plantkeeper.workers
 
-iot: ## Run the IoT simulator: 20 sensors, 10s interval, normal scenario
+iot: ## Run the IoT simulator: 20 sensors, 10s interval, --scenario normal --seed 42
 	uv run python -m plantkeeper.iot_simulator --scenario normal --seed 42
 
-iot-drought: ## Run the IoT simulator in the drought scenario (trips AdaptiveWateringSaga)
+iot-drought: ## Run the IoT simulator with --scenario drought --seed 42 (trips AdaptiveWateringSaga)
 	uv run python -m plantkeeper.iot_simulator --scenario drought --seed 42
 
-iot-dry-run: ## Print the simulated stream to stdout, without Kafka
+iot-dry-run: ## Print the simulated stream to stdout (--dry-run), without touching Kafka
 	uv run python -m plantkeeper.iot_simulator --dry-run --scenario normal --seed 42
