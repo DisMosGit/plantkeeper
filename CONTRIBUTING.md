@@ -46,7 +46,7 @@ uv run pre-commit install
 Common commands:
 
 ```bash
-make dev        # infra + all services
+make dev        # infra only (Kafka, Postgres, Valkey, Console) — processes are separate
 make lint       # ruff + mypy strict
 make test       # all tests
 make migrate    # all migrations

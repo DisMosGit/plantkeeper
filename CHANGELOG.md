@@ -19,7 +19,19 @@ Versioning: [Semantic Versioning](https://semver.org/).
 -
 
 ### Fixed
--
+- Documentation now matches the implemented topology. The README's architecture diagram
+  and the process descriptions in `docs/architecture.md`, `docs/sagas.md` and
+  `CONTRIBUTING.md` describe the code as it is: a saga writes the domain through the same
+  `UnitOfWork` and outbox as the API instead of sending commands back through it, the IoT
+  simulator publishes to `telemetry.raw` rather than into a saga, Django Admin is
+  read-only, `make workers` is one process holding the relay, eight consumer groups, the
+  telemetry ingress and four timers, and `make admin` is one process holding both the
+  projections and Django Admin. The README no longer names `make workers-relay`,
+  `make workers-proj` or `make workers-saga`, which never existed.
+- `docs/telemetry.md` and `docs/events.md` no longer claim a read-side consumer for
+  `telemetry.events` (there is none — the gap is listed in `docs/cqrs.md`) or a
+  `NotificationConsumer` for `SensorOffline` (it handles neither), and `docs/events.md`
+  now lists the `…-notification-push` consumer group that the code runs.
 
 ### Security
 -
