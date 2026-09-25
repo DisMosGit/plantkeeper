@@ -13,25 +13,28 @@ flowchart LR
   subgraph write [Write side]
     API["REST + gRPC<br/>make api, make grpc"]
     UOW["UnitOfWork<br/>aggregate + outbox, one commit"]
+    RELAY["OutboxRelay<br/>make workers"]
+    SAGA["Sagas + write-side consumers<br/>make workers"]
   end
-  DB[("Postgres<br/>write_* schemas")]
-  relay["OutboxRelay<br/>make workers"]
-  K{{"Kafka<br/>one topic per context"}}
+  DB[("Postgres write_*<br/>domain tables")]
+  SHARED[("write_shared<br/>outbox, saga_state, processed_events")]
+  K(["Kafka<br/>one topic per context + telemetry.raw"])
+  IOT["IoT simulator<br/>make iot"]
   subgraph read [Read side]
     PROJ["Projections<br/>make admin"]
-    ANALYTICS[("read_analytics")]
-    ADMIN["Django Admin"]
+    ADMIN["Django Admin<br/>make admin"]
   end
-  IOT["IoT simulator<br/>make iot"]
-  SAGA["Sagas + consumers<br/>make workers"]
-
+  ANALYTICS[("read_analytics")]
   API --> UOW --> DB
-  relay -->|"poll the outbox"| DB
-  relay --> K
-  IOT -->|"telemetry.raw"| SAGA
+  UOW --> SHARED
+  RELAY -->|poll the outbox| SHARED
+  RELAY --> K
   K --> SAGA
-  K --> PROJ --> ANALYTICS --> ADMIN
-  SAGA -->|"next command's events"| DB
+  SAGA --> UOW
+  SAGA -.->|saga state, own session| SHARED
+  IOT -->|telemetry.raw| K
+  K --> PROJ --> ANALYTICS
+  ADMIN -->|reads| ANALYTICS
 ```
 
 The generated, always-current versions of this picture are
@@ -89,17 +92,23 @@ make contracts            # export OpenAPI/AsyncAPI and regenerate the Mermaid d
 make clean                # stop infra and drop volumes
 ```
 
-The system runs as three processes on purpose. `make api` answers HTTP and commits
+The system runs as three deployables on purpose. `make api` answers HTTP and commits
 each command together with the events it produced into the outbox; `make grpc` is a
 second, typed surface over the same application layer (see
-[`docs/grpc.md`](docs/grpc.md)); `make workers` runs the relay that publishes those
-events to Kafka, the write-side consumers (the telemetry ingress that turns
-`telemetry.raw` into readings and events, the sagas, and the notification producers
-and pusher), and their timers (the missed-care tick, the daily catalogue trigger,
-saga recovery and the readings table's partition window); `make admin` consumes them
-into the `read_analytics` schema and serves Django Admin over it. Nothing in either
-API process talks to the broker, so a slow Kafka cannot slow a request down, and
-nothing in the read side reads a write schema. See [`docs/events.md`](docs/events.md)
+[`docs/grpc.md`](docs/grpc.md)). `make workers` holds the whole write-side back end in
+**one** process: the relay that publishes the outbox to Kafka, the eight consumer
+groups — the telemetry ingress that turns `telemetry.raw` into readings and events,
+the two orchestration triggers, the six choreography consumers (the sagas, the
+notification producers and the pusher) — and their timers (the missed-care tick, the
+daily catalogue trigger, saga recovery and the readings table's partition window).
+`make admin` is likewise **one** process: the Kafka consumer that projects events into
+the `read_analytics` schema, plus Django Admin served over it, so the read side is
+never serving a stale page while its projections are down. Nothing in either API
+process talks to the broker, so a slow Kafka cannot slow a request down, and nothing in
+the read side reads a write schema. Which consumer subscribes to which topic is not
+written out by hand here: the generated [`docs/diagrams/event-flow.md`](docs/diagrams/event-flow.md)
+draws every edge from the code and a test fails when it drifts. See
+[`docs/events.md`](docs/events.md)
 for the topic, header and key contract, [`docs/telemetry.md`](docs/telemetry.md) for
 the raw stream and the readings table, [`docs/cqrs.md`](docs/cqrs.md) for the two
 sides, [`docs/sagas.md`](docs/sagas.md) for the process managers,
@@ -141,7 +150,15 @@ Local infrastructure endpoints:
 | Write API (gRPC) | `localhost:50051` (reflection enabled for grpcurl) |
 | Django Admin (read side) | <http://localhost:8001/admin/> |
 
-Connection settings are documented in `.env.example`.
+Connection settings are documented in `.env.example`. Kafka, Postgres and Valkey come
+from `make dev`; the API, worker and admin processes are started separately by their own
+targets, and `make workers` has no endpoint of its own — it is a consumer and a relay.
+
+Note what the read side does *not* show: telemetry has no projection, so a reading
+lives in `write_telemetry.sensor_readings` and travels on as `telemetry.events`, but it
+never reaches a `read_analytics` table. That is the deliberate gap
+[`docs/cqrs.md`](docs/cqrs.md) tracks under "What is not projected yet", not an
+accident.
 
 ## Contracts
 

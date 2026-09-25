@@ -247,7 +247,23 @@ during `make test`.
 | Write-side worker | — | `make workers` |
 | IoT simulator | — | `make iot` |
 
-`make dev` starts the stack and waits for every service to report healthy.
+`make dev` starts the **infrastructure only** — Kafka, Postgres, Valkey and Redpanda
+Console — and waits until the containers report healthy; it starts no application
+process. Each process has its own target, and two of them are not the single component
+their target name suggests:
+
+- `make workers` is one process holding the outbox relay, the eight write-side consumer
+  groups, the telemetry ingress on `telemetry.raw` and the four timers
+  (`MissedCareScheduler`, `SpeciesSyncScheduler`, `SagaRecoveryJob`,
+  `TelemetryPartitionJob`) — `apps/workers/src/plantkeeper/workers/main.py:84-113`.
+- `make admin` is one process holding the projection consumer **and** Django Admin:
+  `apps/admin/src/plantkeeper/admin/asgi.py:45-74` mounts the Django ASGI application
+  and starts the projection broker in the same lifespan.
+
+`make api` and `make grpc` are the two processes that never build a broker, which is what
+keeps a slow Kafka off the request path. Which consumer subscribes to which topic is not
+restated here: the generated [`docs/diagrams/event-flow.md`](diagrams/event-flow.md) draws
+every edge from the registries, and `tests/unit/docs` fails when it drifts.
 
 ## References
 
