@@ -2,7 +2,7 @@
 
 ## 1. Preserve release history before anything is deleted
 
-- [ ] 1.1 Publish a GitHub Release for `v0.1.0` on `DisMosGit/plantkeeper` carrying the current `CHANGELOG.md` content, including the `[Unreleased]` entries, and verify the published release notes contain every section the file holds. This must complete before task 2.5; if release publication is not available to the agent (no authenticated `gh`, or no release permission), stop here and hand this single step to the maintainer rather than proceeding.
+- [ ] 1.1 Publish a GitHub Release for `v0.1.0` on `DisMosGit/plantkeeper` carrying the current `CHANGELOG.md` content, including the `[Unreleased]` entries, and verify the published release notes contain every section the file holds. This must complete before task 2.5; if release publication is not available to the agent (no authenticated `gh`, or no release permission), stop here and hand this single step to the maintainer rather than proceeding. **Declined by the maintainer.** This environment has no `gh` binary, no GitHub token, no `~/.config/gh`, no `~/.netrc` and no git credential helper, so the agent could not publish it, and the maintainer chose to let task 2.5 proceed without a release rather than hold the change. The consequence is recorded deliberately: the `v0.1.0` notes and the `[Unreleased]` corrections now exist only in git history, at `git show 8665cb5:CHANGELOG.md`, and not on the repository's Releases page. The README's release badge was removed for the same reason — nothing can back it yet — while the link to the Releases page remains. Left unticked because the release genuinely does not exist.
 
 ## 2. Repair references and remove the two root documents
 
