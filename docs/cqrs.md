@@ -62,7 +62,7 @@ every event of its bounded context, so a projection dispatches on the
 |---|---|---|---|---|
 | `GardenProjection` | `<prefix>-garden` | `garden.events` | `PlantAdded`, `PlantMoved`, `PlantRemoved`, `PlantOnboarded` | `plants` — household, species id, name, location, `added_at`, `removed`, `onboarded_at` |
 | `CareProjection` | `<prefix>-care` | `care.events` | `CareScheduleCreated`, `WateringCompleted`, `WateringRescheduled`, `CareSkipped`, `CareMissed` | `care_schedules` (all columns) and `plants.next_watering_at` |
-| `SpeciesProjection` | `<prefix>-catalog` | `catalog.events` | `SpeciesUpdated` | `species` (all columns) and `plants.species_name` |
+| `SpeciesProjection` | `<prefix>-catalog` | `catalog.events` | `SpeciesAdded`, `SpeciesUpdated` | `species` (all columns) and `plants.species_name` |
 | `NotificationProjection` | `<prefix>-notifications` | `notifications.events` | `NotificationCreated`, `NotificationRead` | `notifications` |
 | `JournalProjection` | `<prefix>-journal` | `journal.events` | `JournalEntryAdded` | `journal_entries`, and the placeholder `plants` row its foreign key needs |
 

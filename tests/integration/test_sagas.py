@@ -378,7 +378,7 @@ class ExplodingPublishStep(PublishPlantOnboardedStep):
 async def test_a_failing_last_step_compensates_the_notification_as_well(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """The roadmap's compensation is *both* writes, so both are rolled back here.
+    """The compensation is *both* writes, so both are rolled back here.
 
     ``ExplodingNotificationStep`` fails before the notification exists and can only
     prove the schedule's rollback; this one fails at the last step, where the
@@ -426,7 +426,7 @@ async def test_a_failing_last_step_compensates_the_notification_as_well(
 async def test_the_saga_state_repository_reads_what_recovery_needs(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """`SagaStateRepository` is the read side of `saga_state` (ROADMAP 4.1).
+    """`SagaStateRepository` is the read side of `saga_state`, the saga engine's store.
 
     It returns the rows the engine writes, so a reader can tell a crashed saga from
     a finished one, from one another worker is still touching, and from one that has

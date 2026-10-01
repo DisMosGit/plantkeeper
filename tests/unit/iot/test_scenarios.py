@@ -1,8 +1,8 @@
 """The five scenarios, each distinguishable by what it does to the soil.
 
-A scenario is a handful of parameters, so these tests are about the *effects* the
-roadmap promises: drought dries faster, overwatering stays above the high
-threshold, a cold snap is cold, a failing sensor goes quiet and comes back.
+A scenario is a handful of parameters, so these tests are about the *effects* each
+one promises: drought dries faster, overwatering stays above the high threshold, a
+cold snap is cold, a failing sensor goes quiet and comes back.
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ def readings_over(name: str, *, ticks: int, sensors: int = 2) -> list[list[Readi
     return [readings_at(simulator, tick) for tick in range(ticks)]
 
 
-def test_every_roadmap_scenario_exists() -> None:
+def test_every_named_scenario_exists() -> None:
     assert set(SCENARIOS) == {NORMAL, DROUGHT, OVERWATERING, "cold_snap", SENSOR_FAILURE}
 
 

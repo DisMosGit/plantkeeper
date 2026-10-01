@@ -14,9 +14,9 @@ contract forbids it from importing `plantkeeper.domain`, `plantkeeper.applicatio
 
 That places one job on the write side: a sensor's telemetry is only meaningful once
 somebody has registered the sensor for a plant (`POST /api/v1/sensors`). The simulator
-prints the sensor ids it derives, precisely so that an operator can register the ones
-they intend to watch; readings from a sensor nobody registered are dropped by the
-ingress, with a warning.
+reports the base id at startup and derives each sensor id from it (see
+`--sensor-base-id` below), so an operator can work out which ids to register; readings
+from a sensor nobody registered are dropped by the ingress, with a warning.
 
 ## The physical model
 
@@ -49,11 +49,12 @@ disagree by a fraction of a degree, but they disagree the same way on every run.
 | `cold_snap` | −2 °C ambient | below the temperature-anomaly threshold, and slows drying to a crawl |
 | `sensor_failure` | sensors go silent for five minutes, staggered per sensor | the stream stops for a key and then resumes, as a restarting sensor does |
 
-The thresholds the scenarios are built around are the domain's own
-(`MOISTURE_LOW_THRESHOLD`, `MOISTURE_HIGH_THRESHOLD`, the temperature band), so a
-scenario cannot drift away from what the consumer reacts to. `AdaptiveWateringSaga`
-keeps its own two-day horizon: `drought` trips the low threshold at once, but the saga
-still only reschedules a watering that is more than two days away.
+The thresholds the scenarios are built around mirror the domain's
+(`MOISTURE_LOW_THRESHOLD`, `MOISTURE_HIGH_THRESHOLD`, the temperature band). The
+simulator may not import the domain — the import rules forbid it — so those values are
+duplicated rather than shared, and nothing currently pins the two copies to each other.
+`AdaptiveWateringSaga` keeps its own two-day horizon: `drought` trips the low threshold
+at once, but the saga still only reschedules a watering that is more than two days away.
 
 ## Command line
 

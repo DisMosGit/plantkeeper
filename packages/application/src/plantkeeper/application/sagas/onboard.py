@@ -4,8 +4,8 @@ Orchestration, not choreography: one process manager owns the sequence, so the
 steps are visible in one place and a failure in a later step rolls back what the
 earlier ones created. It is started by ``PlantAdded`` and runs four steps:
 
-1. resolve the species (the ACL the roadmap calls "get ``species_id`` from
-   Catalog") and read its watering cadence;
+1. resolve the species (the catalogue ACL's "get ``species_id`` from Catalog")
+   and read its watering cadence;
 2. create the plant's ``CareSchedule`` — ``CareScheduleCreated``;
 3. create the household's first notification — ``NotificationCreated``
    (``plant_onboarded``);

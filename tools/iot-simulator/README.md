@@ -1,8 +1,8 @@
 # IoT simulator
 
 Virtual sensors with a physical model, publishing to Kafka's `telemetry.raw` topic.
-`ROADMAP.md` Phase 5 describes the behaviour; `docs/iot-simulator.md` documents the
-model and the runbook.
+The [`iot-telemetry` spec](../../openspec/specs/iot-telemetry/spec.md)
+covers the behaviour; `docs/iot-simulator.md` documents the model and the runbook.
 
 ```bash
 # see the stream without a broker

@@ -5,8 +5,8 @@ that the append path exists exactly once:
 
 * :func:`load_journal_aggregate` replays a plant's stream into a
   :class:`~plantkeeper.domain.journal.aggregate.JournalAggregate`, starting from the
-  newest snapshot. This is where the roadmap's "``load_stream`` uses a snapshot"
-  lives: the port reads the events *after* the snapshot's version and the aggregate
+  newest snapshot. This is where "``load_stream`` uses a snapshot" lives: the port
+  reads the events *after* the snapshot's version and the aggregate
   starts from the snapshot's state, so a checkpoint bounds the replay without the
   repository having to know what an aggregate is.
 * :func:`record_journal_entry` appends one entry: the event-store row, the outbox

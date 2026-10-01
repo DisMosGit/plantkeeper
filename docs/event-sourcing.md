@@ -3,7 +3,8 @@
 > **Status:** implemented. The journal is append-only, replayable from its own stream,
 > and can answer "what did it look like on any date". The architectural decision is
 > [ADR 0009](adr/0009-event-sourcing-journal.md); this document is the operational
-> detail behind it, and the phase's close-out is in `ROADMAP.md`.
+> detail behind it, and the close-out is recorded as the
+> [`care-journal` spec](../openspec/specs/care-journal/spec.md).
 
 The Journal is the project's **only** event-sourced aggregate. Every other context
 stores current state and publishes facts as a side effect; the journal stores the

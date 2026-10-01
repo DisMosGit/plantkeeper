@@ -137,7 +137,7 @@ consumer owes it.
 - **Follow-up:** `write_shared.idempotency_keys` grows without bound until Phase
   8 adds expiry; `POST /api/v1/households` exists because `POST /api/v1/plants`
   needs a household and Identity has no ORM model yet.
-- **Complemented:** the roadmap's planned ADR `outbox-pattern` is
+- **Complemented:** the planned ADR `outbox-pattern` is
   [ADR 0008](0008-outbox-pattern.md), which documents the consuming half — the
   ledger, the derived identifiers and the offset policy — and references this ADR for
   the table and the relay instead of restating them.

@@ -1,10 +1,10 @@
 """End-to-end test of the event-sourced journal.
 
-Phase 6's acceptance test: a watering goes through the real API, the relay publishes
+The acceptance test: a watering goes through the real API, the relay publishes
 ``WateringCompleted`` to Kafka, the worker's real consumer registration feeds it to
 ``JournalEntryConsumer``, and the plant's journal — replayed from the event store —
-carries the entry. The dated endpoint is then asked the same question the roadmap
-asks: what did the journal look like before that day, and on it?
+carries the entry. The dated endpoint is then asked the same question: what did the
+journal look like before that day, and on it?
 
 The pieces the API and the worker share are the production ones, so this exercises
 the wiring rather than a test-only path.

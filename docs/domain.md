@@ -195,4 +195,3 @@ the event catalogue in [`docs/events.md`](events.md) from drifting apart.
 - [`docs/events.md`](events.md) — domain event catalogue
 - [`docs/architecture.md`](architecture.md) — contexts, layers, data flow
 - [`docs/adr/0002-bounded-contexts.md`](adr/0002-bounded-contexts.md) — why these eight contexts
-- [`ROADMAP.md`](../ROADMAP.md) — phases and their Definition of Done

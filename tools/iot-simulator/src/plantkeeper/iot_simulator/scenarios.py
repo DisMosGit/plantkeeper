@@ -7,8 +7,8 @@ at all. The physical model is shared (:mod:`plantkeeper.iot_simulator.physics`);
 a scenario only tilts its parameters, which is what keeps five scenarios from
 becoming five simulations.
 
-The scenarios are the ones ``ROADMAP.md`` names: ``normal``, ``drought``,
-``overwatering``, ``cold_snap`` and ``sensor_failure``.
+The scenarios are ``normal``, ``drought``, ``overwatering``, ``cold_snap`` and
+``sensor_failure``.
 """
 
 from __future__ import annotations

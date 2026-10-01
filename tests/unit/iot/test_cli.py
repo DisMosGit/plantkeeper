@@ -91,7 +91,7 @@ class StopAfter:
 # --- arguments ----------------------------------------------------------------
 
 
-def test_the_defaults_are_the_roadmaps() -> None:
+def test_the_defaults_are_the_documented_ones() -> None:
     args = parse_args([])
 
     assert args.sensors == 20

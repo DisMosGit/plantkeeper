@@ -2,7 +2,7 @@
 
 The Notifications context owns one thing — a message waiting for the household —
 and this consumer is its only *general* producer: it turns the care and telemetry
-events the roadmap names (Phase 8.3) into
+events it handles into
 :class:`~plantkeeper.domain.notifications.notification.Notification` rows in the
 same transaction as its idempotency claim. The onboarding saga still creates its
 ``plant_onboarded`` reminder and ``AdaptiveWateringSaga`` its

@@ -5,8 +5,7 @@
 > ingress, the Journal as an event-sourced aggregate, the gRPC surface over the same
 > application layer, notifications delivered by HTTP long polling, and the Trefle
 > catalogue synchronisation with its circuit breaker and Valkey cache. The generated
-> contracts and diagrams are Phase 10 — see [`ROADMAP.md`](../ROADMAP.md) and
-> [`docs/patterns.md`](patterns.md).
+> contracts and diagrams are documented in [`docs/patterns.md`](patterns.md).
 
 ## Overview
 
@@ -279,4 +278,3 @@ every edge from the registries, and `tests/unit/docs` fails when it drifts.
 - [`docs/notifications.md`](notifications.md) — HTTP long polling
 - [`docs/catalog.md`](catalog.md) — the Trefle ACL, breaker and cache
 - [`docs/adr/`](adr/) — architecture decision records
-- [`ROADMAP.md`](../ROADMAP.md) — phases and their Definition of Done

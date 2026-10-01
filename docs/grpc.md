@@ -1,9 +1,9 @@
 # gRPC API
 
 > **Status:** Phase 7. The `CareService` and `GardenService` are served over gRPC
-> by `apps/api`, next to the REST API and over the same application layer. See
-> [`ROADMAP.md`](../ROADMAP.md) §7 and
-> [`docs/adr/0006-rest-and-grpc.md`](adr/0006-rest-and-grpc.md).
+> by `apps/api`, next to the REST API and over the same application layer. See the
+> [`integration-contracts` spec](../openspec/specs/integration-contracts/spec.md)
+> and [`docs/adr/0006-rest-and-grpc.md`](adr/0006-rest-and-grpc.md).
 
 PlantKeeper speaks two protocols on purpose: REST is the general-purpose,
 browser-friendly write API, and gRPC is the typed, reflection-discoverable surface

@@ -1,9 +1,9 @@
 """The daily catalogue synchronisation trigger.
 
 The manual path already exists: ``POST /api/v1/catalog/sync`` appends
-``SpeciesSyncRequested`` to the outbox. This scheduler is the other trigger the
-roadmap asks for, and it deliberately publishes *the same event* through *the same
-port* rather than calling the saga — so "cron" and "manual" cannot drift into two
+``SpeciesSyncRequested`` to the outbox. This scheduler is the other trigger, and it
+deliberately publishes *the same event* through *the same port* rather than calling
+the saga — so "cron" and "manual" cannot drift into two
 different synchronisations.
 
 It waits one interval before the first tick: a cron does not fire at start-up, and

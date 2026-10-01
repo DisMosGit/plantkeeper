@@ -133,7 +133,7 @@ async def test_a_partial_batch_is_flushed_once_time_has_passed(
     assert fake.flushes == 1
 
 
-async def test_the_default_batch_is_the_one_the_roadmap_asks_for() -> None:
+async def test_the_default_batch_is_the_documented_one() -> None:
     assert BATCH_MAX_MESSAGES == 100
 
 

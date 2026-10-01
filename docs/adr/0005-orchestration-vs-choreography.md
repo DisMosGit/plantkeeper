@@ -10,9 +10,11 @@ Accepted
 
 ## Context
 
-Phase 4 adds four process managers (`ROADMAP.md` §4.1–4.6): onboarding a plant,
-adapting a watering schedule to telemetry, escalating a missed watering after a
-24-hour grace period, and synchronising the catalogue from an upstream source.
+Phase 4 adds four process managers, specified by the
+[`process-managers` spec](../../openspec/specs/process-managers/spec.md):
+onboarding a plant, adapting a watering schedule to telemetry, escalating a missed
+watering after a 24-hour grace period, and synchronising the catalogue from an
+upstream source.
 They are not alike. Two of them have a *sequence* — resolve the species, create a
 schedule, create a reminder, announce the plant — where a failure halfway through
 must undo what already happened. Two are *reactions*: when the soil is dry, move
@@ -61,8 +63,8 @@ nothing, and `SagaMediator.stream` does not surface the dispatched saga's id.
    `write_shared.saga_state` and `write_shared.saga_log`, created by Alembic
    migration `0002`. The execution row carries status, context, an
    optimistic-lock version and a recovery counter; the append-only log carries the
-   step transitions the engine replays. The roadmap's single `saga_state(saga_id,
-   type, state, step, …)` table is therefore split in two, because compensation has
+   step transitions the engine replays. A single `saga_state(saga_id, type, state,
+   step, …)` table is therefore split in two, because compensation has
    to reconstruct *which* steps ran, and a single "current step" column cannot
    answer that.
 
@@ -121,7 +123,7 @@ outbox event. See [docs/catalog.md](../catalog.md).
 
 ## References
 
-- [ROADMAP Phase 4](../ROADMAP.md), [docs/sagas.md](../sagas.md)
+- [`process-managers` spec](../../openspec/specs/process-managers/spec.md), [docs/sagas.md](../sagas.md)
 - [ADR 0002](0002-bounded-contexts.md) — bounded contexts and the shared kernel
 - [ADR 0003](0003-write-side-outbox.md) — why the outbox is this project's own
 - [ADR 0004](0004-read-side-projections.md) — the read side's consumer base

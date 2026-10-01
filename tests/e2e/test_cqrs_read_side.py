@@ -254,7 +254,7 @@ async def test_the_journal_inline_renders_on_the_plant_page(
     read_side_settings: Settings,
     read_side_database: str,
 ) -> None:
-    """The plant page carries the journal the roadmap asks for."""
+    """The plant page carries the journal the read model promises."""
     household_id = await create_household(api_client)
 
     async with running_admin(read_side_settings) as admin:
@@ -270,8 +270,8 @@ async def test_the_journal_inline_renders_on_the_plant_page(
 
     assert detail.status_code == 200, detail.text
     # This plant was never watered, so the inline is present with its headings and no
-    # rows: the entry the roadmap asks for comes from a watering, which the journal
-    # flow test drives end to end.
+    # rows: a journal entry comes from a watering, which the journal flow test
+    # drives end to end.
     assert "Journal entries" in detail.text
 
 

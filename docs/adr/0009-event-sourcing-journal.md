@@ -19,9 +19,9 @@ row. It also has a second reader: the care facts arrive as events from Care, so
 recording them by replaying the events that caused them is one move rather than a
 translation.
 
-The roadmap (§6.1–6.4) asks for an append-only store, an aggregate that restores from
-it, snapshots, a REST surface and Django Admin. The decisions that were not in the
-roadmap are the ones this ADR records:
+The requirement was an append-only store, an aggregate that restores from it,
+snapshots, a REST surface and Django Admin. The decisions that were left open are the
+ones this ADR records:
 
 1. whether event sourcing is a project-wide choice or a per-context one;
 2. how a stream detects and refuses a lost race;
@@ -90,9 +90,9 @@ ledger appends nothing. An append-only history does not survive a duplicate.
 - **Harder:** two writers to one stream are possible — the consumer and the command —
   and a burst of care events for one plant serialises on the version. The alternative
   (per-writer streams) would break the ordered-log invariant the timeline depends on.
-- **Constrained:** `AddJournalEntryCommand` has no REST endpoint. The roadmap's §6
-  does not ask for one, the consumer is its caller in production, and a manual entry
-  endpoint would need an authorization story the project does not have.
+- **Constrained:** `AddJournalEntryCommand` has no REST endpoint. Nothing asked for
+  one, the consumer is its caller in production, and a manual entry endpoint would
+  need an authorization story the project does not have.
 - **Constrained:** `FERTILIZING`, `REPOTTING` and `NOTE` entries have no producer yet:
   Care produces no event for them today. `docs/event-sourcing.md` records it, and the
   aggregate accepts them so the endpoint or producer can be added without a migration.
