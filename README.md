@@ -1,5 +1,9 @@
 # 🌿 PlantKeeper
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md)
+[![Python 3.14+](https://img.shields.io/badge/python-3.14%2B-blue.svg)](https://www.python.org/downloads/)
+[![Package manager: uv](https://img.shields.io/badge/package%20manager-uv-DE5FE9.svg)](https://docs.astral.sh/uv/)
+
 Event-driven plant care platform for a household plant collection, with simulated IoT
 telemetry. One "household", several members, no authentication.
 
@@ -43,6 +47,34 @@ generated, always-current versions of it are
 [`docs/diagrams/event-flow.md`](docs/diagrams/event-flow.md) (every event edge) and
 [`docs/diagrams/sagas.md`](docs/diagrams/sagas.md) (the orchestration sagas' steps);
 those two are rendered from the code and `tests/unit/docs` fails when they drift.
+
+## Key features
+
+- **Eight bounded contexts** that communicate only through Kafka events — no context
+  imports another's internals, and the dependency rules are enforced by `import-linter`
+  rather than by review.
+- **Transactional outbox.** Every write commits the aggregate's new state and the events
+  it raised in one transaction; a relay publishes them afterwards, so no request handler
+  ever contacts the broker.
+- **Idempotent consumers.** Each consumer claims a delivery in a ledger keyed by
+  consumer group and event id, inside the same transaction as its work. The telemetry
+  ingress is the one documented exception, deduplicated on the reading key instead.
+- **CQRS read side.** Django projections write a separate `read_analytics` schema, and a
+  read model can be rebuilt by replaying its topic.
+- **Event sourcing, deliberately in one place.** The Journal keeps one append-only stream
+  per plant, with snapshots and "what was true on this date" reads.
+- **Four process managers** — two orchestrated with per-step compensation (plant
+  onboarding, catalogue synchronisation) and two choreographed (adaptive watering,
+  missed care).
+- **IoT telemetry** from a simulator with a physical model, five named scenarios and a
+  reproducible seed; readings land in a month-partitioned table keyed by sensor and
+  instant.
+- **Notifications by HTTP long polling**, woken by a payload-free per-household signal —
+  a lost wake-up costs latency, never a message.
+- **Generated contracts.** OpenAPI, two AsyncAPI documents and the committed Mermaid
+  diagrams are rendered from the code, and the test suite fails when one drifts.
+- **Two protocols, one application layer.** REST and gRPC dispatch to the same command
+  and query handlers over the same DI container.
 
 ## Stack
 
@@ -188,7 +220,6 @@ when either drifts from the code.
 
 ## Documentation
 
-- [`ROADMAP.md`](ROADMAP.md) — phases, atomic tasks, Definition of Done
 - [`docs/architecture.md`](docs/architecture.md) — bounded contexts, layers, data flow
 - [`docs/patterns.md`](docs/patterns.md) — every pattern the platform uses, linked to its code
 - [`docs/domain.md`](docs/domain.md) — ubiquitous language, aggregates, invariants
@@ -203,8 +234,8 @@ when either drifts from the code.
 - [`docs/catalog.md`](docs/catalog.md) — the Trefle anti-corruption layer, its circuit breaker, and the Valkey species cache
 - [`docs/diagrams/`](docs/diagrams/) — the generated event-flow and saga diagrams
 - [`docs/adr/`](docs/adr/) — architecture decision records
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — branches, commits, local workflow
-- [`CHANGELOG.md`](CHANGELOG.md) — release history
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — the change lifecycle, commit style and scopes, local workflow
+- [GitHub Releases](https://github.com/DisMosGit/plantkeeper/releases) — where release notes are published
 - [`AGENTS.md`](AGENTS.md) — guidance for AI coding agents
 
 ### Architecture decision records
@@ -220,6 +251,23 @@ when either drifts from the code.
 | [0007](docs/adr/0007-why-python-cqrs.md) | What we take from `python-cqrs` and what we own |
 | [0008](docs/adr/0008-outbox-pattern.md) | The outbox as a whole pattern: producers, ledgers and offsets |
 | [0009](docs/adr/0009-event-sourcing-journal.md) | Why the Journal is event-sourced, and how its stream is protected |
+
+## Changes and specifications
+
+Planned work is tracked with [OpenSpec](https://github.com/Fission-AI/OpenSpec), under
+[`openspec/`](openspec/):
+
+- [`openspec/specs/`](openspec/specs/) — the project's capability specifications: what
+  each part of the platform is required to do, written as testable requirements.
+- [`openspec/changes/`](openspec/changes/) — the work in flight. Each change carries
+  four artifacts: `proposal.md` (why and what), `specs/**/spec.md` (the requirements as
+  deltas), `design.md` (the decisions) and `tasks.md` (the checklist).
+
+A change moves through four steps: **propose** (write the artifacts, then
+`openspec validate "<name>" --strict`), **review**, **implement** (work `tasks.md` one
+task at a time, ticking each task in the commit that finishes it) and **archive**
+(`openspec archive "<name>"` merges the deltas into `openspec/specs/`). The commands and
+the working rules are in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Test coverage
 
@@ -250,3 +298,13 @@ uv run python apps/admin/manage.py createsuperuser
 Django Admin's own tables (`auth_*`, `django_*`) live in the `public` schema and
 exist because the admin framework needs them; the platform's read models live in
 `read_analytics` and are written only by projections.
+
+## Contributing
+
+[`CONTRIBUTING.md`](CONTRIBUTING.md) covers the change lifecycle, the commit style and
+its scope list, and how to run everything locally. [`AGENTS.md`](AGENTS.md) states the
+same rules for coding agents.
+
+## License
+
+[MIT](LICENSE.md).
