@@ -1,20 +1,28 @@
 # Architecture
 
 > **Status:** every phase is implemented. The write path with its transactional
-> outbox, the CQRS read side, the four sagas, the IoT simulator with its telemetry
-> ingress, the Journal as an event-sourced aggregate, the gRPC surface over the same
-> application layer, notifications delivered by HTTP long polling, and the Trefle
-> catalogue synchronisation with its circuit breaker and Valkey cache. The generated
-> contracts and diagrams are documented in [`docs/patterns.md`](patterns.md).
+> outbox, the CQRS read side on its own database, the four sagas and the dispatcher
+> that runs their recorded cross-context commands, the IoT simulator with its telemetry
+> ingress and telemetry read side, the Journal as an event-sourced aggregate, the gRPC
+> surface over the same application layer, notifications delivered by a stream with the
+> request-and-wait form as fallback, and the Trefle catalogue synchronisation with its
+> circuit breaker and Valkey cache. The generated contracts and diagrams are documented
+> in [`docs/patterns.md`](patterns.md).
 
 ## Overview
 
 PlantKeeper is an event-driven plant care platform built around one household, its
 plants, and a stream of simulated IoT telemetry. The domain is deliberately split into
-bounded contexts that communicate **only** through Kafka events: no bounded context
-imports another context's internals, and there is no synchronous HTTP call between
-contexts. The one external call — Trefle, for species data — is wrapped in an
-anti-corruption layer with a circuit breaker and a cache.
+bounded contexts that share no internals: no bounded context imports another context's
+internals, none calls another context over the network, and none reads another context's
+tables. **Across processes the only integration is events.** Within the worker process an
+orchestration saga coordinates through the shared application layer: it commits its own
+progress and a recorded command in one transaction, and a dispatcher executes that
+command through the owning context's own handlers, so a process manager asks rather than
+writes ([ADR 0012](adr/0012-saga-command-dispatch.md)). A step that needs another
+context's data during the step reads it through the port that context defines — the one
+such read is recorded below. The one external call — Trefle, for species data — is
+wrapped in an anti-corruption layer with a circuit breaker and a cache.
 
 ## Bounded contexts
 
@@ -26,8 +34,8 @@ anti-corruption layer with a circuit breaker and a cache.
 | Care | Watering schedules and their adaptation to telemetry | `write_care` |
 | Journal | Append-only care log (event sourced) | `write_journal` |
 | Telemetry | Ingestion and aggregation of sensor readings | `write_telemetry` |
-| Notifications | Notifications delivered by HTTP long polling | `write_notifications` |
-| Analytics | Read models for Django Admin and reports | `read_analytics` |
+| Notifications | Notifications delivered by a stream, or by request and wait | `write_notifications` |
+| Analytics | Read models for Django Admin and reports | `read_analytics` and `read_telemetry` (the read instance) |
 | — (shared) | Outbox, idempotency keys, saga state, the consumer ledger | `write_shared` |
 
 Seven contexts have aggregates and events; Analytics is the read-side context, and
@@ -45,29 +53,42 @@ same map in prose.
 
 | From | Event(s) | To | Through |
 |------|----------|----|---------|
-| Garden | `PlantAdded`, `PlantOnboarded` | Care | `OnboardPlantSaga` creates the schedule and the first reminder |
+| Garden | `PlantAdded`, `PlantOnboarded` | Care | `OnboardPlantSaga` records the schedule command, then `CommandDispatcher` executes it through Care's own handler |
 | Garden | `PlantAdded`, `PlantMoved`, `PlantOnboarded`, `PlantRemoved` | Analytics | `GardenProjection` |
+| Garden | `PlantAdded`, `PlantMoved`, `PlantRemoved` | Journal | `JournalEntryConsumer` maintains the journal's own reference row |
+| Garden | `PlantAdded`, `PlantMoved`, `PlantRemoved` | Notifications | `NotificationConsumer` maintains its own reference row |
 | Care | `WateringCompleted` | Journal | `JournalEntryConsumer` appends the entry |
 | Care | `WateringCompleted`, `WateringDue`, `WateringRescheduled`, `CareMissed`, `CareSkipped` | Analytics | `CareProjection` |
 | Care | `WateringDue`, `WateringRescheduled`, `CareMissed` | Notifications | `NotificationConsumer` |
 | Telemetry | `TelemetryReceived`, `SoilMoistureHigh` | Care | `AdaptiveWateringSaga` moves the schedule |
-| Telemetry | `SoilMoistureLow`, `TemperatureAnomaly` | Notifications | `NotificationConsumer` |
+| Telemetry | `SoilMoistureLow`, `TemperatureAnomaly`, `SensorOffline` | Notifications | `NotificationConsumer` |
+| Telemetry | `TelemetryReceived`, `SoilMoistureLow`, `SoilMoistureHigh`, `TemperatureAnomaly`, `SensorOffline` | Analytics | `TelemetryRollupProjection` writes `read_telemetry` |
 | Catalog | `SpeciesAdded`, `SpeciesUpdated` | Analytics | `SpeciesProjection`; the onboarding saga reads the catalogue through its own port, not by consuming this event |
 | Catalog | `SpeciesUpdated`, `SpeciesCacheInvalidated` | Catalog (cache) | `SpeciesCacheConsumer` drops the Valkey keys |
-| Notifications | `NotificationCreated` | Notifications (delivery) | `NotificationPusher` wakes the household's long poll |
+| Notifications | `NotificationCreated` | Notifications (delivery) | `NotificationPusher` wakes the household's stream or long poll |
 | Notifications | `NotificationCreated`, `NotificationRead` | Analytics | `NotificationProjection` |
 | Journal | `JournalEntryAdded` | Analytics | `JournalProjection` |
-| any saga | `SagaStarted`, `SagaCompleted`, `SagaFailed`, `SagaCompensated` | observability | `saga.events`; no read model projects them |
+| any saga | `SagaStarted`, `SagaCompleted`, `SagaFailed`, `SagaCompensated`, `SagaRetrying`, `SagaParked` | observability | `saga.events`; no read model projects them |
 
-Telemetry's own facts have no read model: no projection consumes `telemetry.events`, so
-`SensorOffline` — the one event without a producer — has no consumer either. Both facts
-are recorded in `docs/events.md` and [`docs/telemetry.md`](telemetry.md) as limits of
-the telemetry context rather than as gaps to be filled silently.
+Every catalogued event has a producer and at least one consumer. `SensorOffline` was
+the last exception — nothing raised it and nobody handled it — and the silence timer in
+the worker and the notification consumer closed it; the telemetry read side then took
+the whole topic, so a sensor reading reaches the sagas, the household's reminders and
+`read_telemetry` without any of them reading the readings table
+([`docs/telemetry.md`](telemetry.md)).
 
 Event-carried state transfer, not a shared database: a context that needs another's
-fact subscribes to it (`docs/events.md`). The one request/response conversation is the
-catalogue lookup the onboarding saga performs through `SpeciesCatalog`, which is a
-local read of `write_catalog` rather than a call into another context's code.
+fact subscribes to it (`docs/events.md`), and a context that needs a durable reference
+to another context's aggregate keeps a reference row of its own, filled from the
+events that context publishes. The notifications and journal contexts each hold one
+(`write_notifications.plant_refs`, `write_journal.plant_refs`), maintained from the
+Garden context's `PlantAdded`/`PlantMoved`/`PlantRemoved` under their own consumer
+groups, so neither reads `write_garden` to find out which household a plant belongs
+to. The one read a process makes through another context's port is the onboarding
+saga's species lookup: it asks the catalogue through `SpeciesCatalog`, a local read of
+the catalogue the Catalog context owns rather than a call into its code — the ACL
+[ADR 0005](adr/0005-orchestration-vs-choreography.md) chose, and the reason a plant
+whose species the catalogue has never seen gets no schedule (`docs/catalog.md`).
 
 ## Layered architecture
 
@@ -96,7 +117,7 @@ sequenceDiagram
     participant A as API (REST or gRPC)
     participant M as Mediator
     participant U as UnitOfWork
-    participant D as Postgres
+    participant D as Postgres (write instance)
     participant R as OutboxRelay
     participant K as Kafka
 
@@ -123,14 +144,14 @@ aggregate-derived key, at-least-once delivery and the dead-letter path — is in
 
 ## Read path
 
-`Kafka -> projection consumer -> read_analytics -> Django Admin / REST queries`
+`Kafka -> projection consumer -> read_analytics + read_telemetry -> Django Admin / client list and report queries`
 
 ```mermaid
 sequenceDiagram
     participant K as Kafka topic
     participant P as Projection
     participant L as processed_events
-    participant D as read_analytics
+    participant D as read_analytics (read instance)
     participant U as Django Admin
 
     K->>P: delivery (event_name header, event document)
@@ -147,9 +168,19 @@ topic safely. Rebuilding a read model is dropping its group and its ledger rows 
 [`docs/cqrs.md`](cqrs.md) holds the procedure, [ADR 0004](adr/0004-read-side-projections.md)
 the reasoning.
 
+The read models live on a database instance of their own, not in the write instance
+that holds `write_*`: a projection rebuild and the admin's queries cannot compete
+with the write path, and a truncate-and-replay cannot reach a write table. The API
+reaches the same instance through a second, read-only engine for the client
+list/report queries, so a command's own answer stays on the write side while "what
+does the system look like" is answered from what was projected. The two URLs are
+settings — pointing `READ_POSTGRES_*` back at the write instance collapses the split
+— and [`docs/runbooks/local-topology.md`](runbooks/local-topology.md) holds the
+start, the verification and that rollback.
+
 ## Telemetry path
 
-`IoT simulator -> telemetry.raw -> telemetry ingress -> sensor_readings + outbox -> relay -> telemetry.events -> AdaptiveWateringSaga`
+`IoT simulator -> telemetry.raw -> telemetry ingress -> sensor_readings + outbox -> relay -> telemetry.events -> AdaptiveWateringSaga + NotificationConsumer + TelemetryRollupProjection`
 
 ```mermaid
 sequenceDiagram
@@ -160,6 +191,7 @@ sequenceDiagram
     participant R as OutboxRelay
     participant G as AdaptiveWateringSaga
     participant N as NotificationConsumer
+    participant P as TelemetryRollupProjection
 
     S->>T: raw reading (sensor_id, recorded_at, moisture, …)
     T->>I: delivery
@@ -168,7 +200,8 @@ sequenceDiagram
     I->>O: TelemetryReceived (+ threshold events) if the insert inserted
     I->>I: COMMIT reading and event together
     R->>G: telemetry.events (TelemetryReceived, SoilMoistureHigh)
-    R->>N: telemetry.events (SoilMoistureLow, TemperatureAnomaly)
+    R->>N: telemetry.events (SoilMoistureLow, TemperatureAnomaly, SensorOffline)
+    R->>P: telemetry.events (every telemetry event)
 ```
 
 The simulator in `tools/iot-simulator` is a producer of raw measurements, not of domain
@@ -189,19 +222,28 @@ side's **telemetry ingress** (`plantkeeper.application.telemetry`, subscribed by
    inserts no row announces nothing either;
 5. hands the reading to `Sensor.record`, which raises `SoilMoistureLow`,
    `SoilMoistureHigh` and `TemperatureAnomaly` by threshold — the three events that
-   were in the catalogue before they had a producer.
+   were in the catalogue before they had a producer — and persists the sensor's
+   `last_seen_at` in the same transaction;
+6. leaves the last event to the worker's **silence timer**, `SensorSilenceJob`, which
+   finds sensors silent past the domain's threshold and calls `Sensor.mark_offline`
+   once per silence, so `SensorOffline` has a producer too.
 
-`docs/telemetry.md` holds the envelope, the partitioning scheme and the runbook;
-`docs/iot-simulator.md` holds the model and the CLI.
+`docs/telemetry.md` holds the envelope, the partitioning and retention scheme, the
+telemetry read side and the runbook; `docs/iot-simulator.md` holds the model and the
+CLI.
 
 ## Saga path
 
-`garden.events -> OnboardPlantTrigger -> OnboardPlantSaga -> write_care + write_notifications + outbox`
+`garden.events -> OnboardPlantTrigger -> OnboardPlantSaga -> saga_intents (recorded command) -> CommandDispatcher -> write_care + outbox`
 
 The two orchestration sagas run their steps through `python-cqrs`' engine with
 per-step compensation; the two choreography sagas are ordinary consumers. Their real
 step sequences are generated into [`docs/diagrams/sagas.md`](diagrams/sagas.md) from
-the step lists, so the diagram cannot describe a sequence the code does not have.
+the step lists, so the diagram cannot describe a sequence the code does not have. A
+step that would change another context records a command in the same transaction as the
+saga's own progress instead of writing that context's tables, and the worker's
+`CommandDispatcher` executes it through the owning context's handlers; a recorded
+failure is retried within its budget and then parked for an operator, who can reset it.
 Which shape fits which saga, and where saga state lives, is
 [ADR 0005](adr/0005-orchestration-vs-choreography.md); the runbook is
 [`docs/sagas.md`](sagas.md).
@@ -237,7 +279,8 @@ during `make test`.
 | Service | Endpoint | Provided by |
 |---------|----------|-------------|
 | Kafka (KRaft, no Zookeeper) | `localhost:9092` | `docker-compose.yml` |
-| Postgres 18 | `localhost:5432` | `docker-compose.yml` |
+| Postgres 18 — write instance | `localhost:5432` | `docker-compose.yml` (`postgres`) |
+| Postgres 18 — read instance | `localhost:5433` | `docker-compose.yml` (`postgres-read`) |
 | Valkey 9 | `localhost:6379` | `docker-compose.yml` |
 | Redpanda Console | <http://localhost:8080> | `docker-compose.yml` |
 | Write API (REST) | <http://localhost:8000> | `make api` |
@@ -246,15 +289,24 @@ during `make test`.
 | Write-side worker | — | `make workers` |
 | IoT simulator | — | `make iot` |
 
-`make dev` starts the **infrastructure only** — Kafka, Postgres, Valkey and Redpanda
-Console — and waits until the containers report healthy; it starts no application
-process. Each process has its own target, and two of them are not the single component
-their target name suggests:
+`make dev` starts the **infrastructure only** — Kafka, both Postgres instances, Valkey
+and Redpanda Console — and waits until the containers report healthy; it starts no
+application process. The write instance holds the `write_*` schemas; the read instance
+holds `read_analytics` and `read_telemetry`. `make api` and `make workers` address the
+write instance,
+`make admin` addresses the read instance, and `make api` additionally opens a
+read-only engine on the read instance for the client list/report queries. Both URLs
+are settings, so pointing the read side back at the write instance collapses the two
+into one database; [`docs/runbooks/local-topology.md`](runbooks/local-topology.md)
+holds the commands, the verification and the rollback. Each process has its own
+target, and two of them are not the single component their target name suggests:
 
 - `make workers` is one process holding the outbox relay, the eight write-side consumer
-  groups, the telemetry ingress on `telemetry.raw` and the four timers
+  groups, the telemetry ingress on `telemetry.raw`, the `CommandDispatcher` that executes
+  the sagas' recorded cross-context commands and the five timers
   (`MissedCareScheduler`, `SpeciesSyncScheduler`, `SagaRecoveryJob`,
-  `TelemetryPartitionJob`) — `apps/workers/src/plantkeeper/workers/main.py:84-113`.
+  `TelemetryPartitionJob`, `SensorSilenceJob`) —
+  `apps/workers/src/plantkeeper/workers/main.py:77-96`.
 - `make admin` is one process holding the projection consumer **and** Django Admin:
   `apps/admin/src/plantkeeper/admin/asgi.py:45-74` mounts the Django ASGI application
   and starts the projection broker in the same lifespan.
@@ -270,11 +322,12 @@ every edge from the registries, and `tests/unit/docs` fails when it drifts.
 - [`docs/domain.md`](domain.md) — ubiquitous language, aggregates, invariants
 - [`docs/events.md`](events.md) — the event catalogue and its transport
 - [`docs/cqrs.md`](cqrs.md) — the read side's projections
+- [`docs/runbooks/local-topology.md`](runbooks/local-topology.md) — the two instances, their verification and the rollback
 - [`docs/sagas.md`](sagas.md) — the four process managers
 - [`docs/event-sourcing.md`](event-sourcing.md) — the Journal's stream and its replay
 - [`docs/telemetry.md`](telemetry.md) — the raw envelope and the readings table
 - [`docs/iot-simulator.md`](iot-simulator.md) — the physical model and the CLI
 - [`docs/grpc.md`](grpc.md) — the gRPC services and the error table
-- [`docs/notifications.md`](notifications.md) — HTTP long polling
+- [`docs/notifications.md`](notifications.md) — the notification stream and its request-and-wait fallback
 - [`docs/catalog.md`](catalog.md) — the Trefle ACL, breaker and cache
 - [`docs/adr/`](adr/) — architecture decision records

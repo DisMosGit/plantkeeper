@@ -20,7 +20,9 @@ make grpc    # gRPC server on 0.0.0.0:50051
 ```
 
 The server is a process of its own, like `make api` and `make admin`. It uses the
-same `Settings` — in particular the Postgres connection — and, like the REST
+same `Settings` — in particular the two Postgres connections, because the list and
+report reads (`ListPlants`, `GetTodayCare`) answer from the read models while the
+commands and their answers stay on the write store — and, like the REST
 process, it never talks to Kafka: commands commit their events into the outbox and
 the worker's relay publishes them.
 

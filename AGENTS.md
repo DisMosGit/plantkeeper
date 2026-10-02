@@ -12,7 +12,8 @@ Guidance for AI coding agents working in this repository.
 - FastAPI (REST) + gRPC + Django 6.1 (ASGI admin)
 - FastStream + Kafka (KRaft)
 - `python-cqrs` (commands, queries, events, sagas, outbox)
-- SQLAlchemy 2.0 async + Alembic (write), Django ORM (read schema)
+- SQLAlchemy 2.0 async + Alembic (write), Django ORM (the two read schemas, on their
+  own database) and a read-only SQLAlchemy engine for the client queries
 - Dishka (DI), Pydantic v2, Valkey, httpx
 - Ruff + Mypy (strict) + pytest-asyncio + testcontainers
 
@@ -23,7 +24,8 @@ Guidance for AI coding agents working in this repository.
 - `packages/infrastructure` — persistence, messaging, external, cache, DI
 - `apps/api` — FastAPI REST + gRPC servicers
 - `apps/admin` — read-side projection consumers + ASGI Django read models
-- `apps/workers` — write-side FastStream consumers (outbox relay, saga consumers, timers)
+- `apps/workers` — write-side FastStream consumers (outbox relay, saga consumers,
+  command dispatcher, timers)
 - `tools/iot-simulator` — Kafka telemetry generator
 - `proto/` — gRPC definitions
 - `docs/` — architecture, domain, ADRs, runbooks
@@ -31,7 +33,10 @@ Guidance for AI coding agents working in this repository.
 ## Rules
 
 - Domain layer is pure: no imports from infrastructure, FastAPI, Django, or SQLAlchemy.
-- All cross-context communication goes through Kafka events, never direct imports.
+- All cross-process integration goes through Kafka events, and no context ever imports
+  another's internals. A saga changes a context it does not own by recording a command
+  the owning context executes (`docs/adr/0012-saga-command-dispatch.md`), never by
+  writing that context's tables.
 - Every write use case goes through Unit of Work + Transactional Outbox.
 - Every Kafka consumer must be idempotent on `(consumer_group, event_id)`. The telemetry
   ingress is the one documented exception: it keeps no ledger and is idempotent on the
@@ -49,7 +54,7 @@ uv run ruff check .         # lint
 uv run ruff format .        # format
 uv run mypy .               # typecheck
 uv run pytest               # tests
-docker compose up -d        # Kafka, Postgres, Valkey
+docker compose up -d        # Kafka, both Postgres instances, Valkey
 uv run python -m plantkeeper.iot_simulator --scenario normal --seed 42
 ```
 

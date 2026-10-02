@@ -112,10 +112,10 @@ uv run pre-commit install
 Common commands:
 
 ```bash
-make dev        # infra only (Kafka, Postgres, Valkey, Console) — processes are separate
+make dev        # infra only (Kafka, both Postgres instances, Valkey, Console) — processes are separate
 make lint       # ruff + mypy strict + import-linter
 make test       # all tests
-make migrate    # all migrations
+make migrate    # all migrations (Alembic write, Django read_analytics + read_telemetry)
 make iot        # IoT simulator (normal)
 make clean      # stop infra, drop volumes
 ```

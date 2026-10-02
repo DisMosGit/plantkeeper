@@ -77,6 +77,13 @@ Kafka consumer runs it inside the ledger's.
 `completed_at`. It is registered in the worker's consumer registry like the
 choreography sagas and gets its own group (`<prefix>-journal-entries`).
 
+It also subscribes to `garden.events`, for the one fact it needs and does not own:
+which household a plant belongs to. `PlantAdded`, `PlantMoved` and `PlantRemoved`
+maintain `write_journal.plant_refs`, the journal's own row, and the consumer resolves
+a watering from that row rather than from `write_garden`. A watering for a plant this
+context has not seen is logged and dropped — there is no household to record it
+against (`plantkeeper.application.references`).
+
 **Idempotency is defended twice.** The ledger claims `(consumer_group, event_id)` in
 the same transaction as the append, as every consumer does; and the entry's identifier
 is derived from the event (`watering_entry_id`), so even a rebuilt group — a reset

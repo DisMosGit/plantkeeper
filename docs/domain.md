@@ -23,7 +23,7 @@ the layer direction and the independence of the bounded contexts (`make lint`).
 | Care schedule | The next watering moment of one plant, versioned for optimistic locking |
 | Sensor reading | One immutable measurement: moisture, temperature, light, timestamp |
 | Journal entry | An immutable, append-only record of care performed on one plant |
-| Notification | A message for the household, delivered by HTTP long polling |
+| Notification | A message for the household, delivered by a stream or by request and wait |
 | User | A household member; this project has no authentication |
 
 ## Bounded contexts and aggregates
@@ -37,10 +37,11 @@ the layer direction and the independence of the bounded contexts (`make lint`).
 | Telemetry | `Sensor` | A reading must come from its own sensor; a sensor belongs to exactly one plant; offline only after 10 silent minutes | `write_telemetry` |
 | Notifications | `Notification` | Acknowledged at most once; `read_at` is set by an explicit ack | `write_notifications` |
 | Identity | `User` | Display name is not blank; a user belongs to exactly one household | `write_identity` |
-| Analytics | *(none — read side)* | Projections are built from Kafka events | `read_analytics` |
+| Analytics | *(none — read side)* | Projections are built from Kafka events | `read_analytics` + `read_telemetry` (the read instance) |
 
 Analytics has no domain aggregates: it is the read-model context described in
-[`docs/architecture.md`](architecture.md) and is built from events in Phase 3.
+[`docs/architecture.md`](architecture.md), built by projecting the other contexts'
+events onto a database instance of its own.
 
 ## Value objects
 

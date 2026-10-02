@@ -7,10 +7,9 @@
 > and its consumers are the read side's projections
 > ([`docs/cqrs.md`](cqrs.md)), the write side's sagas
 > ([`docs/sagas.md`](sagas.md)) and the telemetry ingress
-> ([`docs/telemetry.md`](telemetry.md)). `SensorOffline` is the one exception on both
-> counts: nothing raises it and no consumer handles it, which the generated
-> [`docs/diagrams/event-flow.md`](diagrams/event-flow.md) states under "no consumer at
-> all". Every other event has a producer.
+> ([`docs/telemetry.md`](telemetry.md)). Every event now has a producer and at least
+> one consumer: `SensorOffline` was the last exception, and the silence timer in the
+> worker and the notification consumer closed it.
 >
 > The catalogue is also exported in machine-readable form: the
 > `x-plantkeeper-event-catalogue` extension of `docs/asyncapi-write.json` and
@@ -45,7 +44,7 @@ and everything a consumer needs beyond it travels in the headers.
 
 **Topics — one per bounded context, not one per event type.** A consumer that
 cares about three Garden events subscribes once and dispatches on the
-`event_name` header. Twenty-six topics would push the broker's metadata cost onto
+`event_name` header. Twenty-eight topics would push the broker's metadata cost onto
 every consumer for no benefit at this scale.
 
 | Topic | Events |
@@ -56,9 +55,9 @@ every consumer for no benefit at this scale.
 | `journal.events` | `JournalEntryAdded` |
 | `telemetry.events` | `TelemetryReceived`, `SoilMoistureLow`, `SoilMoistureHigh`, `TemperatureAnomaly`, `SensorOffline` |
 | `notifications.events` | `NotificationCreated`, `NotificationRead` |
-| `saga.events` | `SagaStarted`, `SagaCompleted`, `SagaFailed`, `SagaCompensated` |
+| `saga.events` | `SagaStarted`, `SagaCompleted`, `SagaFailed`, `SagaCompensated`, `SagaRetrying`, `SagaParked` |
 | `telemetry.raw` | **raw sensor JSON, not a domain event** — see below |
-| `plantkeeper.dlq.v1` | messages the relay gave up on, from any of the above |
+| `plantkeeper.dlq.v1` | messages the relay or a consumer gave up on, from any of the above |
 
 **`telemetry.raw` is the one exception to "every message on Kafka is a domain event".**
 It carries what a sensor reported — `sensor_id`, `recorded_at`, `moisture`,
@@ -71,16 +70,40 @@ policy and the table are in [`docs/telemetry.md`](telemetry.md).
 **Body** — `json.dumps(event.model_dump(mode="json"), separators=(",", ":"))`,
 compact so the payload is the event and nothing else.
 
-**Headers** — `event_name` and `event_id`, so a consumer can deserialise without
-guessing the type and can deduplicate on `(consumer_group, event_id)`. A
-dead-lettered message also carries `original_topic` and `error`, which is enough
-for an operator to replay it to the right place without decoding the body.
+**Headers.** Two are mandatory and say what the message *is*: `event_name` and
+`event_id`, so a consumer can deserialise without guessing the type and can
+deduplicate on `(consumer_group, event_id)`.
+
+The rest are **provenance**, and they answer "where did this come from?" without
+touching the body. Every published message carries them (see
+[ADR 0010](adr/0010-message-provenance.md)):
+
+| Header | Meaning | Absent when |
+|--------|---------|-------------|
+| `correlation_id` | the conversation this message belongs to: one API request or one saga has one, and every event it causes shares it | the raising edge had no conversation to join, so it starts one |
+| `causation_id` | the `event_id` of the delivery that caused this message, so a chain is walkable from any link | the message was raised by a request or a timer, not by an event |
+| `raised_by` | the tagged actor: `user:<id>`, `system:<job>`, `saga:<id>` or `service:<name>` | never, for a message the current code raises |
+| `schema_version` | which revision of the event document the body is | never; `1` for every event that predates the field |
+| `traceparent` | W3C trace context, carried opaquely — the platform runs no tracer | the request or trigger had none |
+| `occurred_at` | when the raising edge observed the event; every event one delivery raises shares this instant | the row predates the column |
+
+A dead-lettered message also carries `original_topic` and `error`, which is enough
+for an operator to replay it to the right place without decoding the body. A copy a
+*consumer* made names the `consumer_group` that gave up as well — see the replay
+runbook below.
+
+**Missing provenance is not a contract violation.** A message published before the
+platform carried these headers, or by a hand-written producer, is handled exactly
+as before and attributed to `system:unknown`; a malformed identifier is repaired
+rather than punished. Provenance decorates a message, and losing the ability to
+follow a chain is a smaller cost than losing the message. New events always carry
+it, so the gap closes as the platform runs.
 
 **Key** — the first payload field present among `plant_id`, `household_id`,
 `species_id`, `sensor_id`, `saga_id`, else `event_id` (`partition_key_for`). This
 keeps every event of one aggregate in one partition, and therefore in order,
 without the producer holding global ordering. The saga lifecycle events carry no
-aggregate id, so `saga_id` is what keeps a saga's four messages together.
+aggregate id, so `saga_id` is what keeps a saga's lifecycle messages together.
 
 **Delivery is at-least-once.** A crash between Kafka accepting a message and the
 outbox row being marked published republishes it on the next poll, so every
@@ -94,22 +117,89 @@ read side keeps it in `read_analytics.processed_events`
 and dispatches on the `event_name` header — a topic carries every event of its
 context, so most deliveries are somebody else's. The read side runs one group per
 projection (`<READ_SIDE_CONSUMER_GROUP_PREFIX>-garden`, `…-care`, `…-catalog`,
-`…-notifications`, `…-journal`) with `auto_offset_reset="earliest"`, which is what
-makes a rebuilt read table possible. The write side runs one group per consumer
+`…-notifications`, `…-journal`, `…-telemetry-rollup`) with `auto_offset_reset="earliest"`,
+which is what makes a rebuilt read table possible. The write side runs one group per
+consumer
 (`<WORKER_CONSUMER_GROUP_PREFIX>-onboard-plant`, `…-adaptive-watering`,
 `…-missed-care`, `…-species-sync`, `…-species-cache`, `…-notifications`,
 `…-notification-push`, `…-journal-entries`), plus the telemetry ingress on its own
 group (`plantkeeper-telemetry-ingest`, described below) — nine groups in the one
 `make workers` process. A consumer that meets an unknown
-`event_name`, or a body that does not validate, logs it with the `event_id` and
-acknowledges it rather than blocking the partition behind a contract violation.
+`event_name`, or a body that does not validate — including one that is not JSON at
+all — logs it with the `event_id` and acknowledges it rather than blocking the
+partition behind a contract violation. Decoding therefore never raises: a message
+it cannot read is the failure policy's business, and the policy has a terminal path
+of its own.
 
-**Failure handling.** `attempts` counts failed polls, not individual produce
-calls; `tenacity` retries a transient broker error three times inside one poll.
-After `OUTBOX_MAX_ATTEMPTS` (5) failed polls the message is copied to the
-dead-letter topic and the row is marked `dead_lettered_at`. If the copy itself
-fails the row is retried instead, so no message is dropped silently. See
+### Failure handling: relay and consumer
+
+Two components can fail, and they fail differently. A **relay** failure is "Kafka
+would not take the message"; a **consumer** failure is "the handler raised". Both
+have a bounded retry and a terminal path, and neither drops anything silently.
+
+**The relay claims its rows.** `fetch_unpublished` takes `FOR UPDATE SKIP LOCKED`
+over the pending rows and leases them (`OUTBOX_CLAIM_LEASE_SECONDS`, 60 s), so
+several relays may run at once — they do, briefly, during a rolling deploy — and
+still publish each row once. A relay killed mid-publish leaves a claim that simply
+expires, and the next poll picks the row up; no operator has to intervene.
+
+**The relay preserves order within a key.** A row is only *publishable* when no
+older row with the same `partition_key` is still pending. That filter is the
+ordering barrier: a message that fails holds its successors on the same key back
+instead of letting them overtake it, while other keys proceed untouched. The hold
+is released when the older row is published or abandoned — abandoning it is what
+the dead-letter path below does — so a stuck key frees itself in bounded time.
+
+**The relay retries, then abandons.** `attempts` counts failed polls, not
+individual produce calls; `tenacity` retries a transient broker error three times
+inside one poll. After `OUTBOX_MAX_ATTEMPTS` (5) failed polls the message is copied
+to the dead-letter topic and the row is marked `dead_lettered_at`. If the copy
+itself fails the row is retried instead, so no message is dropped silently. See
 [ADR 0003](adr/0003-write-side-outbox.md).
+
+**A consumer retries, then moves the delivery aside.** A handler that raises is
+classified rather than redelivered forever: a broken domain rule is moved aside
+immediately, and anything else is retried a bounded number of times with backoff
+(`CONSUMER_MAX_ATTEMPTS`, 3, waiting `CONSUMER_RETRY_INITIAL_WAIT_SECONDS` and
+doubling to `CONSUMER_RETRY_MAX_WAIT_SECONDS`). A delivery past its budget is copied
+to `plantkeeper.dlq.v1` with its consumer group, origin and error in the headers,
+and its ledger claim is committed with the copy so it is never handled twice. If the
+copy itself cannot be stored the delivery is left unclaimed and the broker offers it
+again, so nothing is dropped silently. The whole policy is
+[ADR 0011](adr/0011-consumer-failure-policy.md).
+
+The retry budget is real because the offset is not committed until the handler
+returns: every subscriber here sets `ack_policy=NACK_ON_ERROR`, which commits after
+a handled delivery and seeks back to one that raised. FastStream's default
+(`ACK_FIRST`) lets the Kafka client's own timer commit the offset, so a handler that
+raised — or a process that died mid-handler — left a delivery that was neither
+handled nor redelivered.
+
+One exception is deliberate. A recorded saga failure is *not* dead-lettered: the
+trigger's failure path commits `SagaFailed` — and the delivery's claim with it — on
+purpose, so the redelivery stops there and the saga's own retry budget and park
+state decide what happens next ([`docs/sagas.md`](sagas.md)). The telemetry ingress
+keeps no `processed_events` ledger (`AGENTS.md`), so its copy records no claim; a
+replay of a raw reading is absorbed by the readings table's own
+`(sensor_id, recorded_at)` key.
+
+**Replaying a moved-aside message.** `tools/dlq.py` is the operator's interface to
+that topic. It reads the topic as it is now, so nothing is skipped between runs:
+
+```bash
+uv run python tools/dlq.py list                       # what is waiting, and why
+uv run python tools/dlq.py replay --event-id <uuid> --dry-run
+uv run python tools/dlq.py replay --event-id <uuid>   # put it back
+uv run python tools/dlq.py replay --all --consumer-group plantkeeper-worker-journal-entries
+```
+
+`replay` deletes the delivery's ledger claim — in `write_shared.processed_events`
+for a worker's group, in `read_analytics.processed_events` for a projection's —
+and republishes the body to its `original_topic` with the original key and headers.
+The two steps belong together: a replay whose claim survived would be recognised as
+a duplicate and ignored. A replay appends the message to the end of its topic, so it
+is handled after everything that arrived meanwhile rather than in its original
+position, and the consumer group has to be running for it to be handled at all.
 
 ## Catalogue
 
@@ -121,9 +211,9 @@ write side's ([`docs/sagas.md`](sagas.md)).
 
 | Event | Payload | Emitted by | Consumed by |
 |-------|---------|-----------|-------------|
-| `PlantAdded` | `plant_id`, `household_id`, `species_id`, `name`, `location`, `added_at` | `Plant` (`add`) | `GardenProjection`; `OnboardPlantSaga` |
-| `PlantRemoved` | `plant_id`, `removed_at` | `Plant` (`remove`) | `GardenProjection` |
-| `PlantMoved` | `plant_id`, `previous_location`, `location` | `Plant` (`move`) | `GardenProjection` |
+| `PlantAdded` | `plant_id`, `household_id`, `species_id`, `name`, `location`, `added_at` | `Plant` (`add`) | `GardenProjection`; `OnboardPlantSaga`; `NotificationConsumer` and `JournalEntryConsumer` (each records its own reference row) |
+| `PlantRemoved` | `plant_id`, `removed_at` | `Plant` (`remove`) | `GardenProjection`; `NotificationConsumer` and `JournalEntryConsumer` (each forgets its reference row) |
+| `PlantMoved` | `plant_id`, `previous_location`, `location` | `Plant` (`move`) | `GardenProjection`; `NotificationConsumer` and `JournalEntryConsumer` (each refreshes its reference row) |
 | `PlantOnboarded` | `plant_id`, `household_id`, `species_id`, `next_watering_at` | `OnboardPlantSaga` | `GardenProjection` |
 
 ### Care
@@ -165,33 +255,34 @@ moment is the event's `completed_at`.
 
 | Event | Payload | Emitted by | Consumed by |
 |-------|---------|-----------|-------------|
-| `TelemetryReceived` | `sensor_id`, `plant_id`, `recorded_at`, `moisture`, `temperature`, `light` | the telemetry ingress (from `telemetry.raw`, through `Sensor.record`) | Care (`AdaptiveWateringSaga`); the readings table stores the same fact |
-| `SoilMoistureLow` | `sensor_id`, `plant_id`, `moisture`, `threshold` | `Sensor` (`record`), called by the telemetry ingress | `NotificationConsumer` |
-| `SoilMoistureHigh` | `sensor_id`, `plant_id`, `moisture`, `threshold` | `Sensor` (`record`), called by the telemetry ingress | `AdaptiveWateringSaga` |
-| `TemperatureAnomaly` | `sensor_id`, `plant_id`, `temperature`, `low_threshold`, `high_threshold` | `Sensor` (`record`), called by the telemetry ingress | `NotificationConsumer` |
-| `SensorOffline` | `sensor_id`, `plant_id`, `last_seen_at`, `offline_for` | `Sensor` (`mark_offline`) | nobody — no producer and no consumer yet |
+| `TelemetryReceived` | `sensor_id`, `plant_id`, `recorded_at`, `moisture`, `temperature`, `light` | the telemetry ingress (from `telemetry.raw`, through `Sensor.record`) | Care (`AdaptiveWateringSaga`); Analytics (`TelemetryRollupProjection`); the readings table stores the same fact |
+| `SoilMoistureLow` | `sensor_id`, `plant_id`, `moisture`, `threshold` | `Sensor` (`record`), called by the telemetry ingress | `NotificationConsumer`; Analytics (`TelemetryRollupProjection`) |
+| `SoilMoistureHigh` | `sensor_id`, `plant_id`, `moisture`, `threshold` | `Sensor` (`record`), called by the telemetry ingress | `AdaptiveWateringSaga`; Analytics (`TelemetryRollupProjection`) |
+| `TemperatureAnomaly` | `sensor_id`, `plant_id`, `temperature`, `low_threshold`, `high_threshold` | `Sensor` (`record`), called by the telemetry ingress | `NotificationConsumer`; Analytics (`TelemetryRollupProjection`) |
+| `SensorOffline` | `sensor_id`, `plant_id`, `last_seen_at`, `offline_for` | `Sensor` (`mark_offline`), called by `SensorSilenceJob` | `NotificationConsumer`; Analytics (`TelemetryRollupProjection`) |
 
 `TelemetryReceived` is the one catalogued event with no aggregate behind it: a reading is
 an append-only fact, so nothing raises it for the aggregate to own — the ingress appends
 it to the outbox explicitly, in the same transaction as the reading. The three threshold
 events *are* raised by the aggregate: since Phase 8 the ingress calls
 `Sensor.record(reading)`, drains the events it raised and appends each of them to the
-same outbox rowset. The sensor's own state change (`last_seen_at`) is not persisted —
-that stays Phase 5's decision. `SensorOffline` still has no caller: it needs a silence
-timer, which no phase has built.
+same outbox rowset. That same write persists the aggregate's silence state —
+`last_seen_at`, and `offline_announced_at` cleared — which is what lets
+`SensorSilenceJob` find a sensor that has gone quiet and call `mark_offline` once per
+silence.
 
-Every consumer in the table above is on the write side: the read side's five projections
-subscribe to `garden.events`, `care.events`, `catalog.events`, `notifications.events` and
-`journal.events`, and none of them reads `telemetry.events`. A telemetry fact therefore
-reaches the sagas and the notification consumer, and stops there —
-[`docs/cqrs.md`](cqrs.md) keeps the list of what is deliberately unprojected, and
-[`docs/telemetry.md`](telemetry.md) states the same limit from the ingress's side.
+Every telemetry event is projected: `TelemetryRollupProjection` consumes
+`telemetry.events` under a consumer group of its own and writes `read_telemetry`. The
+readings become windowed rollups and a latest-per-sensor row, the threshold alerts are
+recorded on that row, and [`docs/telemetry.md`](telemetry.md) describes the rebuild.
+Nothing a sensor reports is copied into `read_analytics` — the raw readings stay the
+write side's detail record.
 
 ### Notifications
 
 | Event | Payload | Emitted by | Consumed by |
 |-------|---------|-----------|-------------|
-| `NotificationCreated` | `notification_id`, `household_id`, `notification_type`, `payload`, `created_at` | `Notification` (`create`), the notification producers | `NotificationProjection`; `NotificationPusher` (the Valkey nudge behind HTTP long polling) |
+| `NotificationCreated` | `notification_id`, `household_id`, `notification_type`, `payload`, `created_at` | `Notification` (`create`), the notification producers | `NotificationProjection`; `NotificationPusher` (the Valkey nudge behind the notification stream) |
 | `NotificationRead` | `notification_id`, `household_id`, `read_at` | `Notification` (`mark_read`) | `NotificationProjection` |
 
 ### Saga / system
@@ -202,12 +293,19 @@ reaches the sagas and the notification consumer, and stops there —
 | `SagaCompleted` | `saga_id`, `saga_name` | `Saga.handle_event` | operators; any saga observer |
 | `SagaFailed` | `saga_id`, `saga_name`, `error` | `Saga.handle_event` | operators; any saga observer |
 | `SagaCompensated` | `saga_id`, `saga_name` | `Saga.handle_event` | operators; any saga observer |
+| `SagaRetrying` | `saga_id`, `saga_name`, `attempt`, `error` | `SagaRecoveryJob` | operators; any saga observer |
+| `SagaParked` | `saga_id`, `saga_name`, `attempts`, `error` | `SagaRecoveryJob` | operators; any saga observer |
 
-These four report the progress of the process managers rather than a state change
+These six report the progress of the process managers rather than a state change
 in a bounded context; they live in the catalogue because every message on Kafka is
 a `DomainEvent`. Nothing projects them — the saga's execution row in
 `write_shared.saga_state` is the authoritative record, and these are its event
-stream. See [`docs/sagas.md`](sagas.md).
+stream.
+
+`SagaRetrying` and `SagaParked` are the retry budget made observable: a recorded
+failure is retried until `SAGA_RECOVERY_MAX_ATTEMPTS` is spent, and then published
+as parked. Without them a process that quietly stopped being retried would look
+exactly like one still trying. See [`docs/sagas.md`](sagas.md).
 
 ## Deliberate non-events
 
@@ -225,11 +323,6 @@ small and every event has a real cross-context consumer:
 
 ## Deferred
 
-- Windowed aggregation over the readings (a moving moisture average) and a telemetry
-  read model — not scheduled; `docs/telemetry.md` describes what is here.
-- `SensorOffline` has no producer: a sensor that goes quiet needs a silence timer, not
-  a delivery guarantee. It is the only catalogued event with neither a producer nor a
-  consumer, and `tests/e2e` does not cover it.
 - Removing the tabular `write_journal.journal_entries` in favour of the event store
   alone — a destructive migration with no benefit while the two agree
   ([ADR 0009](adr/0009-event-sourcing-journal.md)).
@@ -251,7 +344,7 @@ compensations and how to inspect and recover it are in
 Two more write-side consumers joined in Phase 8 and follow the same discipline:
 `NotificationConsumer` (group `…-notifications`) turns care and telemetry facts into
 notifications, and `NotificationPusher` (group `…-notification-push`) turns
-`NotificationCreated` into the Valkey nudge a long poll waits on
+`NotificationCreated` into the Valkey nudge a notification stream or a long poll waits on
 ([`docs/notifications.md`](notifications.md)).
 
 The telemetry ingress is a consumer of a different kind: it reads `telemetry.raw`, not a

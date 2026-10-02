@@ -103,8 +103,8 @@ flush what is pending before the process exits.
 ## Quickstart
 
 ```bash
-make dev                                   # Kafka, Postgres, Valkey
-make migrate                               # write schema (incl. the readings table)
+make dev                                   # Kafka, both Postgres instances, Valkey
+make migrate                               # write schema (incl. the readings table) + the read schemas
 make api &                                 # the write side, to register sensors
 make workers &                             # the telemetry ingress and the sagas
 make iot-drought                           # a stream that trips AdaptiveWateringSaga

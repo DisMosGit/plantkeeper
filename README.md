@@ -19,27 +19,29 @@ flowchart LR
     UOW["Command handlers + UnitOfWork<br/>aggregate + outbox + claim, one commit"]
     RELAY["OutboxRelay<br/>make workers"]
     SAGA["Sagas + write-side consumers + timer jobs<br/>make workers"]
+    DISPATCH["Command dispatcher<br/>make workers"]
   end
-  PG[("Postgres, one instance<br/>write_*: domain tables<br/>write_shared: outbox, saga_state, saga_log,<br/>processed_events, idempotency_keys")]
+  PGW[("Postgres, write instance :5432<br/>write_*: domain tables<br/>write_shared: outbox, saga_state, saga_log,<br/>saga_intents, processed_events, idempotency_keys")]
   K(["Kafka<br/>one topic per context + telemetry.raw"])
   IOT["IoT simulator<br/>make iot"]
   subgraph read [Read side]
     PROJ["Projections<br/>make admin"]
-    ANALYTICS[("read_analytics<br/>read models + processed_events")]
+    PGR[("Postgres, read instance :5433<br/>read_analytics + read_telemetry<br/>read models + processed_events")]
     ADMIN["Django Admin<br/>make admin, read-only"]
   end
   API --> UOW
-  API -.->|queries| PG
-  UOW -->|"one commit, one transaction"| PG
-  RELAY -->|poll the outbox| PG
+  API -.->|"list/report queries"| PGR
+  UOW -->|"one commit, one transaction"| PGW
+  RELAY -->|poll the outbox| PGW
   RELAY --> K
   K --> SAGA
-  SAGA -->|commands| UOW
-  SAGA -.->|"saga_state + saga_log, own session"| PG
+  SAGA -->|"step + saga_state + recorded command, one commit"| UOW
+  DISPATCH -->|"execute a recorded command"| UOW
+  DISPATCH -.->|claim write_shared.saga_intents| PGW
   IOT -->|telemetry.raw| K
   K --> PROJ
-  PROJ -->|"claim + project, one commit"| ANALYTICS
-  ADMIN -->|reads| ANALYTICS
+  PROJ -->|"claim + project, one commit"| PGR
+  ADMIN -->|reads| PGR
 ```
 
 This sketch is a hand-drawn summary and is deliberately not test-guarded. The
@@ -50,17 +52,22 @@ those two are rendered from the code and `tests/unit/docs` fails when they drift
 
 ## Key features
 
-- **Eight bounded contexts** that communicate only through Kafka events — no context
-  imports another's internals, and the dependency rules are enforced by `import-linter`
-  rather than by review.
+- **Eight bounded contexts with no shared internals.** No context imports another's
+  internals and none calls another over the network, and the dependency rules are
+  enforced by `import-linter` rather than by review. Between processes the only
+  integration is Kafka events; inside the worker process an orchestration saga
+  coordinates through the shared application layer, recording a command that the owning
+  context executes rather than reaching into its tables.
 - **Transactional outbox.** Every write commits the aggregate's new state and the events
   it raised in one transaction; a relay publishes them afterwards, so no request handler
   ever contacts the broker.
 - **Idempotent consumers.** Each consumer claims a delivery in a ledger keyed by
   consumer group and event id, inside the same transaction as its work. The telemetry
   ingress is the one documented exception, deduplicated on the reading key instead.
-- **CQRS read side.** Django projections write a separate `read_analytics` schema, and a
-  read model can be rebuilt by replaying its topic.
+- **CQRS read side on its own database.** Django projections write `read_analytics` and
+  `read_telemetry` on a Postgres instance of their own, the client list and report
+  queries are answered from them through a read-only engine, and a read model can be
+  rebuilt by replaying its topic.
 - **Event sourcing, deliberately in one place.** The Journal keeps one append-only stream
   per plant, with snapshots and "what was true on this date" reads.
 - **Four process managers** — two orchestrated with per-step compensation (plant
@@ -68,9 +75,11 @@ those two are rendered from the code and `tests/unit/docs` fails when they drift
   missed care).
 - **IoT telemetry** from a simulator with a physical model, five named scenarios and a
   reproducible seed; readings land in a month-partitioned table keyed by sensor and
-  instant.
-- **Notifications by HTTP long polling**, woken by a payload-free per-household signal —
-  a lost wake-up costs latency, never a message.
+  instant, are kept for a retention window, and roll up into `read_telemetry` for
+  querying.
+- **Notifications by Server-Sent Events**, woken by a payload-free per-household signal —
+  a lost wake-up costs latency, never a message — with the request-and-wait endpoint kept
+  as the fallback for clients that cannot stream.
 - **Generated contracts.** OpenAPI, two AsyncAPI documents and the committed Mermaid
   diagrams are rendered from the code, and the test suite fails when one drifts.
 - **Two protocols, one application layer.** REST and gRPC dispatch to the same command
@@ -86,7 +95,7 @@ those two are rendered from the code and `tests/unit/docs` fails when they drift
 | Event streaming | FastStream + Kafka (KRaft, no Zookeeper) |
 | CQRS framework | `python-cqrs` |
 | ORM (write) | SQLAlchemy 2.0 async + Alembic |
-| ORM (read / admin) | Django ORM (`read_analytics` schema) |
+| ORM (read / admin) | Django ORM (`read_analytics` and `read_telemetry` schemas), plus a read-only SQLAlchemy engine for the client queries |
 | Cache | Valkey |
 | IoT simulator | own Python service with a physical model |
 | Tests | pytest + pytest-asyncio + testcontainers |
@@ -113,11 +122,11 @@ Requirements: Python 3.14+, [uv](https://docs.astral.sh/uv/), Docker with Compos
 
 ```bash
 uv sync --all-packages    # install the workspace
-make dev                  # start Kafka (KRaft), Postgres, Valkey, Redpanda Console
-make migrate              # apply the schemas (Alembic write_*, Django read_analytics)
+make dev                  # start Kafka (KRaft), both Postgres instances, Valkey, Redpanda Console
+make migrate              # apply the schemas (Alembic write_*, Django read_analytics + read_telemetry)
 make api                  # FastAPI on http://localhost:8000 (OpenAPI at /docs)
 make grpc                 # gRPC on localhost:50051 (Care + Garden; generates proto/ stubs)
-make workers              # outbox relay + telemetry ingress + the sagas and their timers
+make workers              # relay + dispatcher + telemetry ingress + the sagas and their timers
 make admin                # read side on http://localhost:8001/admin/ (projections + Django Admin)
 make iot                  # the IoT simulator: 20 sensors into telemetry.raw
 make lint                 # ruff + mypy + import-linter
@@ -135,28 +144,34 @@ second, typed surface over the same application layer (see
 consumer groups — the two orchestration triggers and the six choreography consumers
 (the two choreography sagas, the journal recorder, the two notification consumers and
 the catalogue cache's invalidator) — plus the telemetry ingress, a ninth group that
-turns `telemetry.raw` into readings and events, and their timers (the missed-care tick,
-the daily catalogue trigger, saga recovery and the readings table's partition window).
-`make admin` is likewise **one** process: the Kafka consumer that projects events into
-the `read_analytics` schema, plus Django Admin served over it, so the read side is
-never serving a stale page while its projections are down. Nothing in either API
-process talks to the broker, so a slow Kafka cannot slow a request down, and nothing in
-the read side reads a write schema. Which consumer subscribes to which topic is not
-written out by hand here: the generated [`docs/diagrams/event-flow.md`](docs/diagrams/event-flow.md)
+turns `telemetry.raw` into readings and events, and six background jobs (the
+command dispatcher that executes a saga's recorded cross-context commands, the
+missed-care tick, the daily catalogue trigger, saga recovery, the readings table's
+partition window and retention, and the sensor silence timer). `make admin` is likewise
+**one** process: the Kafka consumer that projects events into the `read_analytics` and
+`read_telemetry` schemas, plus Django Admin served over them, so the read side is never
+serving a stale page while its projections are down. Nothing in either API process talks
+to the broker, so a slow Kafka cannot slow a request down, and nothing in the read side
+reads a write schema. Which consumer subscribes to which topic is not written out by
+hand here: the generated [`docs/diagrams/event-flow.md`](docs/diagrams/event-flow.md)
 draws every edge from the code and a test fails when it drifts. See
 [`docs/events.md`](docs/events.md)
 for the topic, header and key contract, [`docs/telemetry.md`](docs/telemetry.md) for
-the raw stream and the readings table, [`docs/cqrs.md`](docs/cqrs.md) for the two
-sides, [`docs/sagas.md`](docs/sagas.md) for the process managers,
-[`docs/notifications.md`](docs/notifications.md) for HTTP long polling, and
+the raw stream, the readings table and its read side, [`docs/cqrs.md`](docs/cqrs.md) for
+the two sides, [`docs/sagas.md`](docs/sagas.md) for the process managers,
+[`docs/notifications.md`](docs/notifications.md) for the notification stream, and
 [`docs/catalog.md`](docs/catalog.md) for the Trefle synchronisation and the
 species cache.
 
-A client receives its household's notifications by long-polling the write API; the
-worker's `NotificationPusher` wakes it through Valkey, and the endpoint always
-answers from the write tables:
+A client receives its household's notifications by opening a stream on the write API; the
+worker's `NotificationPusher` wakes it through Valkey, and the content always comes from
+the write tables. The request-and-wait form is kept as the fallback:
 
 ```bash
+# Streaming (primary): resumes from the last notification the client saw
+curl -N "http://localhost:8000/api/v1/notifications/stream?household_id=<uuid>&since=<notification-uuid>"
+
+# Request and wait (fallback): answers at once if something is pending, else after the wait
 curl -N "http://localhost:8000/api/v1/notifications/pending?household_id=<uuid>&timeout=30"
 ```
 
@@ -179,22 +194,25 @@ Local infrastructure endpoints:
 | Service | Endpoint |
 |---------|----------|
 | Kafka | `localhost:9092` |
-| Postgres | `localhost:5432` (database/user/password: `plantkeeper`) |
+| Postgres — write instance | `localhost:5432` (database/user/password: `plantkeeper`) |
+| Postgres — read instance | `localhost:5433` (database/user/password: `plantkeeper`) |
 | Valkey | `localhost:6379` |
 | Redpanda Console | <http://localhost:8080> |
 | Write API (REST) | <http://localhost:8000> (OpenAPI at `/docs`) |
 | Write API (gRPC) | `localhost:50051` (reflection enabled for grpcurl) |
 | Django Admin (read side) | <http://localhost:8001/admin/> |
 
-Connection settings are documented in `.env.example`. Kafka, Postgres and Valkey come
-from `make dev`; the API, worker and admin processes are started separately by their own
-targets, and `make workers` has no endpoint of its own — it is a consumer and a relay.
+Connection settings are documented in `.env.example`. Kafka, both Postgres instances and
+Valkey come from `make dev`; the API, worker and admin processes are started separately by
+their own targets, and `make workers` has no endpoint of its own — it is a consumer and a
+relay.
 
-Note what the read side does *not* show: telemetry has no projection, so a reading
-lives in `write_telemetry.sensor_readings` and travels on as `telemetry.events`, but it
-never reaches a `read_analytics` table. That is the deliberate gap
-[`docs/cqrs.md`](docs/cqrs.md) tracks under "What is not projected yet", not an
-accident.
+Telemetry reaches the read side too: a reading lives in `write_telemetry.sensor_readings`
+for its retention window and travels on as `telemetry.events`, where the telemetry rollup
+projection folds it into `read_telemetry` — a fixed-window rollup and a latest row per
+sensor. The detailed readings are deliberately not copied into the domain read models, so
+the raw table stays the detail record and the rollups stay rebuildable from the topic;
+[`docs/telemetry.md`](docs/telemetry.md) has the shape and the rebuild.
 
 ## Contracts
 
@@ -225,12 +243,12 @@ when either drifts from the code.
 - [`docs/domain.md`](docs/domain.md) — ubiquitous language, aggregates, invariants
 - [`docs/events.md`](docs/events.md) — event catalogue and its Kafka transport
 - [`docs/grpc.md`](docs/grpc.md) — the gRPC services, message conventions, error statuses and grpcurl usage
-- [`docs/telemetry.md`](docs/telemetry.md) — the raw `telemetry.raw` stream, the readings table and its partitions
+- [`docs/telemetry.md`](docs/telemetry.md) — the raw `telemetry.raw` stream, the readings table, its retention and the telemetry read side
 - [`docs/iot-simulator.md`](docs/iot-simulator.md) — the simulator's physical model, scenarios and CLI
 - [`docs/event-sourcing.md`](docs/event-sourcing.md) — the Journal's stream, snapshots and replay
-- [`docs/cqrs.md`](docs/cqrs.md) — write schema, read schema, projections
-- [`docs/sagas.md`](docs/sagas.md) — the four process managers, their compensations and their timers
-- [`docs/notifications.md`](docs/notifications.md) — HTTP long polling, the Valkey presence channel and who creates which notification
+- [`docs/cqrs.md`](docs/cqrs.md) — write schema, the two read schemas, the query split and the projections
+- [`docs/sagas.md`](docs/sagas.md) — the four process managers, their compensations, their recorded commands and their timers
+- [`docs/notifications.md`](docs/notifications.md) — the notification stream and its request-and-wait fallback, the Valkey presence channel and who creates which notification
 - [`docs/catalog.md`](docs/catalog.md) — the Trefle anti-corruption layer, its circuit breaker, and the Valkey species cache
 - [`docs/diagrams/`](docs/diagrams/) — the generated event-flow and saga diagrams
 - [`docs/adr/`](docs/adr/) — architecture decision records
@@ -245,12 +263,15 @@ when either drifts from the code.
 | [0001](docs/adr/0001-record-architecture-decisions.md) | We record architecture decisions |
 | [0002](docs/adr/0002-bounded-contexts.md) | Eight bounded contexts, seven with aggregates, communicating only through events |
 | [0003](docs/adr/0003-write-side-outbox.md) | A hand-rolled transactional outbox and the write side's single producer |
-| [0004](docs/adr/0004-read-side-projections.md) | The read side is Django, writing `read_analytics` through idempotent projections |
+| [0004](docs/adr/0004-read-side-projections.md) | The read side is Django, writing its read schemas on its own instance through idempotent projections |
 | [0005](docs/adr/0005-orchestration-vs-choreography.md) | Which sagas coordinate, and where saga state lives |
 | [0006](docs/adr/0006-rest-and-grpc.md) | Two wire protocols over one application layer |
 | [0007](docs/adr/0007-why-python-cqrs.md) | What we take from `python-cqrs` and what we own |
 | [0008](docs/adr/0008-outbox-pattern.md) | The outbox as a whole pattern: producers, ledgers and offsets |
 | [0009](docs/adr/0009-event-sourcing-journal.md) | Why the Journal is event-sourced, and how its stream is protected |
+| [0010](docs/adr/0010-message-provenance.md) | Provenance and schema version in the headers, and the accepted no-auth trust model |
+| [0011](docs/adr/0011-consumer-failure-policy.md) | A consumer retries a delivery a bounded number of times, then moves it aside |
+| [0012](docs/adr/0012-saga-command-dispatch.md) | A saga changes another context by recording a command, not by writing its tables |
 
 ## Changes and specifications
 
