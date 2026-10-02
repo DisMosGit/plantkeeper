@@ -19,3 +19,12 @@ class SensorNeverSeenError(TelemetryError):
 
 class SensorStillOnlineError(TelemetryError):
     """The sensor reported more recently than the offline threshold."""
+
+
+class SensorAlreadyAnnouncedOfflineError(TelemetryError):
+    """The sensor's current silence has already been announced.
+
+    A sensor quiet for a week is announced once, not once per timer tick: a silence
+    begins at the last reading, and the announcement stands until that sensor
+    reports again.
+    """

@@ -9,6 +9,7 @@ import pytest
 
 from plantkeeper.domain.identifiers import PlantId, SensorId
 from plantkeeper.domain.telemetry.errors import (
+    SensorAlreadyAnnouncedOfflineError,
     SensorNeverSeenError,
     SensorReadingMismatchError,
     SensorStillOnlineError,
@@ -215,3 +216,67 @@ def test_a_sensor_that_never_reported_cannot_be_offline(now: datetime) -> None:
         sensor.mark_offline(now=now + OFFLINE_AFTER)
 
     assert sensor.collect_events() == []
+
+
+def test_marking_offline_twice_announces_the_silence_once(now: datetime) -> None:
+    """A sensor quiet for a week is announced once, not once per timer tick."""
+    sensor = _register(now)
+    sensor.record(_reading(sensor.id, now))
+    sensor.collect_events()
+    sensor.mark_offline(now=now + OFFLINE_AFTER)
+    sensor.collect_events()
+
+    with pytest.raises(SensorAlreadyAnnouncedOfflineError):
+        sensor.mark_offline(now=now + OFFLINE_AFTER + timedelta(hours=1))
+
+    assert sensor.collect_events() == []
+    assert sensor.offline_announced_at == now + OFFLINE_AFTER
+
+
+def test_a_new_reading_clears_the_announcement(now: datetime) -> None:
+    """Reporting again starts a new silence, which may be announced in its turn."""
+    sensor = _register(now)
+    sensor.record(_reading(sensor.id, now))
+    sensor.collect_events()
+    sensor.mark_offline(now=now + OFFLINE_AFTER)
+    sensor.collect_events()
+
+    reported_again = now + OFFLINE_AFTER + timedelta(minutes=1)
+    sensor.record(_reading(sensor.id, reported_again))
+
+    assert sensor.offline_announced_at is None
+    assert sensor.last_seen_at == reported_again
+
+    sensor.collect_events()
+    sensor.mark_offline(now=reported_again + OFFLINE_AFTER)
+
+    assert sensor.offline_announced_at == reported_again + OFFLINE_AFTER
+    offline = sensor.collect_events()[0]
+    assert isinstance(offline, SensorOffline)
+    assert offline.last_seen_at == reported_again
+
+
+def test_a_late_reading_does_not_walk_the_silence_state_backwards(now: datetime) -> None:
+    """A replayed reading older than the newest leaves last-seen and the announcement alone."""
+    sensor = _register(now)
+    sensor.record(_reading(sensor.id, now))
+    sensor.collect_events()
+
+    sensor.record(_reading(sensor.id, now - timedelta(minutes=5)))
+
+    assert sensor.last_seen_at == now
+    assert sensor.collect_events() != []  # the reading is still recorded as a fact
+
+
+def test_a_late_reading_does_not_reopen_an_announced_silence(now: datetime) -> None:
+    sensor = _register(now)
+    sensor.record(_reading(sensor.id, now))
+    sensor.collect_events()
+    sensor.mark_offline(now=now + OFFLINE_AFTER)
+    sensor.collect_events()
+
+    sensor.record(_reading(sensor.id, now - timedelta(minutes=1)))
+
+    assert sensor.offline_announced_at == now + OFFLINE_AFTER
+    with pytest.raises(SensorAlreadyAnnouncedOfflineError):
+        sensor.mark_offline(now=now + OFFLINE_AFTER * 2)
