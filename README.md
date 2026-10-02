@@ -14,41 +14,76 @@ glued together with **Transactional Outbox**, **Idempotent Consumers**, **Sagas*
 
 ```mermaid
 flowchart LR
-  subgraph write [Write side]
-    API["REST + gRPC<br/>make api, make grpc"]
-    UOW["Command handlers + UnitOfWork<br/>aggregate + outbox + claim, one commit"]
-    RELAY["OutboxRelay<br/>make workers"]
-    SAGA["Sagas + write-side consumers + timer jobs<br/>make workers"]
-    DISPATCH["Command dispatcher<br/>make workers"]
+  USER(["Client"])
+  OPS(["Admin user"])
+  IOT["IoT simulator · make iot"]
+
+  subgraph entry ["Edge — serves commands and queries"]
+    API["API · REST + gRPC<br/>make api / make grpc"]
   end
-  PGW[("Postgres, write instance :5432<br/>write_*: domain tables<br/>write_shared: outbox, saga_state, saga_log,<br/>saga_intents, processed_events, idempotency_keys")]
-  K(["Kafka<br/>one topic per context + telemetry.raw"])
-  IOT["IoT simulator<br/>make iot"]
-  subgraph read [Read side]
-    PROJ["Projections<br/>make admin"]
-    PGR[("Postgres, read instance :5433<br/>read_analytics + read_telemetry<br/>read models + processed_events")]
-    ADMIN["Django Admin<br/>make admin, read-only"]
+
+  subgraph write ["Write side"]
+    UOW["Command handlers + UnitOfWork<br/>aggregate · outbox · claim"]
+    SAGA["Process managers + write-side consumers + timer jobs<br/>steps · saga_intents · make workers"]
+    DISPATCH["Command dispatcher — polls saga_intents,<br/>runs the owning context's handlers · make workers"]
+    INGRESS["Telemetry ingress — validate · resolve<br/>sensor to plant · dedup · make workers"]
+    RELAY["Outbox relay — polls the outbox,<br/>claimed rows, per-key order · make workers"]
   end
-  API --> UOW
-  API -.->|"list/report queries"| PGR
-  UOW -->|"one commit, one transaction"| PGW
-  RELAY -->|poll the outbox| PGW
-  RELAY --> K
-  K --> SAGA
-  SAGA -->|"step + saga_state + recorded command, one commit"| UOW
-  DISPATCH -->|"execute a recorded command"| UOW
-  DISPATCH -.->|claim write_shared.saga_intents| PGW
-  IOT -->|telemetry.raw| K
-  K --> PROJ
-  PROJ -->|"claim + project, one commit"| PGR
-  ADMIN -->|reads| PGR
+
+  subgraph dbs ["Databases"]
+    PG[("Postgres — write instance :5432<br/>write_*: domain tables<br/>write_shared: outbox · saga_state · saga_log ·<br/>saga_intents · processed_events · idempotency_keys")]
+    RDB[("Postgres — read instance :5433<br/>read_analytics: read models + ledger<br/>read_telemetry: rollups · sensor_latest")]
+  end
+
+  subgraph kafka ["Kafka"]
+    T_DOM(["domain topics — one per context"])
+    T_RAW(["telemetry.raw"])
+    T_TELE(["telemetry.events"])
+    T_SAGA(["saga.events"])
+  end
+
+  subgraph read ["Read side · make admin"]
+    PROJ["Domain projections"]
+    TELEPROJ["Telemetry rollup projection"]
+    ADMIN["Django Admin — read-only"]
+  end
+
+  USER -->|"commands + queries"| API
+  OPS -->|"uses"| ADMIN
+
+  API -->|"command"| UOW
+  API -.->|"command-support reads + own answers"| PG
+  UOW ==>|"state + outbox + claim · ONE commit"| PG
+
+  T_DOM -->|"domain events"| SAGA
+  SAGA ==>|"checkpoint + lifecycle event + intent · ONE commit"| PG
+  DISPATCH ==>|"claim intent → owning context's handler →<br/>effect + outbox + mark · ONE commit"| PG
+
+  RELAY -->|"claim + poll"| PG
+  RELAY -->|"publish"| T_DOM
+  RELAY -->|"publish"| T_TELE
+  RELAY -->|"publish"| T_SAGA
+
+  IOT -->|"telemetry.raw"| T_RAW
+  T_RAW -->|"raw readings"| INGRESS
+  INGRESS ==>|"sensor_readings + outbox · ONE commit"| PG
+
+  T_TELE -->|"telemetry.events"| TELEPROJ
+  TELEPROJ ==>|"claim + upsert rollups · ONE commit"| RDB
+
+  T_DOM -->|"domain events"| PROJ
+  PROJ ==>|"claim + project · ONE commit"| RDB
+  API -.->|"client list / report queries · read-only"| RDB
+  ADMIN -.->|"reads"| RDB
 ```
 
-This sketch is a hand-drawn summary and is deliberately not test-guarded. The
-generated, always-current versions of it are
-[`docs/diagrams/event-flow.md`](docs/diagrams/event-flow.md) (every event edge) and
-[`docs/diagrams/sagas.md`](docs/diagrams/sagas.md) (the orchestration sagas' steps);
-those two are rendered from the code and `tests/unit/docs` fails when they drift.
+Thick arrows are the writes that commit in a single transaction, dotted arrows are
+reads, and plain arrows are message flow and relay claims. The sketch is hand-drawn
+and is deliberately not test-guarded; the generated, always-current versions of it
+are [`docs/diagrams/event-flow.md`](docs/diagrams/event-flow.md) (every event edge)
+and [`docs/diagrams/sagas.md`](docs/diagrams/sagas.md) (the orchestration sagas'
+steps); those two are rendered from the code and `tests/unit/docs` fails when they
+drift.
 
 ## Key features
 
@@ -316,9 +351,12 @@ Django's own login instead, creating the user once with:
 uv run python apps/admin/manage.py createsuperuser
 ```
 
-Django Admin's own tables (`auth_*`, `django_*`) live in the `public` schema and
-exist because the admin framework needs them; the platform's read models live in
-`read_analytics` and are written only by projections.
+Django Admin's own tables (`auth_*`, `django_*`) live in the read instance's
+`public` schema and exist because the admin framework needs them. The platform's
+read models live in two schemas of that instance, each with its own Django
+migration: `read_analytics` holds the domain read models and the consumer ledger
+every projection claims a delivery in, and `read_telemetry` holds the telemetry
+rollups and the latest row per sensor. Both are written only by projections.
 
 ## Contributing
 
