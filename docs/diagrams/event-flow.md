@@ -20,7 +20,7 @@ graph LR
     relay -->|"JournalEntryAdded"| journalevents
     relay -->|"NotificationCreated, NotificationRead"| notificationsevents
     relay -->|"SensorOffline, SoilMoistureHigh, SoilMoistureLow, TemperatureAnomaly"| telemetryevents
-    sagas -->|"SagaCompensated, SagaCompleted, SagaFailed, SagaStarted"| sagaevents
+    sagas -->|"SagaCompensated, SagaCompleted, SagaFailed, SagaParked, SagaRetrying, SagaStarted"| sagaevents
     ingress -->|"TelemetryReceived"| telemetryevents
     careevents["care.events"]
     catalogevents["catalog.events"]
@@ -37,15 +37,27 @@ graph LR
     Care -->|"CareSkipped"| Analytics
     Journal -->|"JournalEntryAdded"| Analytics
     Garden -->|"PlantAdded"| Analytics
+    Garden -->|"PlantAdded"| Journal
+    Garden -->|"PlantAdded"| Notifications
     Garden -->|"PlantMoved"| Analytics
+    Garden -->|"PlantMoved"| Journal
+    Garden -->|"PlantMoved"| Notifications
     Garden -->|"PlantOnboarded"| Analytics
     Garden -->|"PlantRemoved"| Analytics
+    Garden -->|"PlantRemoved"| Journal
+    Garden -->|"PlantRemoved"| Notifications
+    Telemetry -->|"SensorOffline"| Notifications
+    Telemetry -->|"SensorOffline"| Other
     Telemetry -->|"SoilMoistureHigh"| Care
+    Telemetry -->|"SoilMoistureHigh"| Other
     Telemetry -->|"SoilMoistureLow"| Notifications
+    Telemetry -->|"SoilMoistureLow"| Other
     Catalog -->|"SpeciesAdded"| Analytics
     Catalog -->|"SpeciesUpdated"| Analytics
     Telemetry -->|"TelemetryReceived"| Care
+    Telemetry -->|"TelemetryReceived"| Other
     Telemetry -->|"TemperatureAnomaly"| Notifications
+    Telemetry -->|"TemperatureAnomaly"| Other
     Care -->|"WateringCompleted"| Analytics
     Care -->|"WateringCompleted"| Journal
     Care -->|"WateringDue"| Notifications
@@ -53,5 +65,5 @@ graph LR
     Care -->|"WateringRescheduled"| Notifications
   end
   note["consumed only inside their own context: NotificationCreated, NotificationRead, SpeciesCacheInvalidated, SpeciesSyncRequested"]
-  note2["no consumer at all: SagaCompensated, SagaCompleted, SagaFailed, SagaStarted, SensorOffline"]
+  note2["no consumer at all: SagaCompensated, SagaCompleted, SagaFailed, SagaParked, SagaRetrying, SagaStarted"]
 ```

@@ -17,8 +17,20 @@ import warnings
 from plantkeeper.admin.asyncapi import VERSION, build_document
 from plantkeeper.admin.projections import ALL_PROJECTIONS
 from plantkeeper.infrastructure.config import Settings
+from plantkeeper.infrastructure.messaging.topics import (
+    HEADER_EVENT_ID,
+    HEADER_EVENT_NAME,
+    HEADER_SCHEMA_VERSION,
+    PROVENANCE_HEADERS,
+)
 
 EXPECTED_TOPICS = {topic for projection in ALL_PROJECTIONS for topic in projection.topics}
+
+ENVELOPE_HEADERS = frozenset(PROVENANCE_HEADERS) | {HEADER_EVENT_NAME, HEADER_EVENT_ID}
+"""Every header the relay writes onto a message (``docs/events.md``)."""
+
+REQUIRED_HEADERS = [HEADER_EVENT_NAME, HEADER_EVENT_ID, HEADER_SCHEMA_VERSION]
+"""The three a consumer cannot work without: type, identity and schema version."""
 
 
 def build_document_without_warnings(settings: Settings) -> dict[str, object]:
@@ -89,3 +101,26 @@ def test_the_document_carries_the_event_catalogue() -> None:
     assert isinstance(events, list)
     assert events
     assert all("topic" in event and "producer" in event for event in events)
+
+
+def test_every_message_declares_the_envelope_headers() -> None:
+    """A Kafka subscriber declares no header model, so the generator adds one.
+
+    Without this the document would say a message is "a payload and a correlation
+    identifier" while the platform writes the provenance envelope of
+    ``docs/events.md`` (ADR 0010).
+    """
+    document = build_document_without_warnings(Settings())
+    components = document["components"]
+    assert isinstance(components, dict)
+    messages = components["messages"]
+    assert isinstance(messages, dict)
+    assert messages
+    for name, message in messages.items():
+        assert isinstance(message, dict), name
+        headers = message["headers"]
+        assert isinstance(headers, dict), name
+        properties = headers["properties"]
+        assert isinstance(properties, dict), name
+        assert set(properties) == ENVELOPE_HEADERS, name
+        assert headers["required"] == REQUIRED_HEADERS, name

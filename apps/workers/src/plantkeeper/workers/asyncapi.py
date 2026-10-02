@@ -40,7 +40,11 @@ from faststream.kafka import KafkaBroker
 from faststream.specification.asyncapi import AsyncAPI
 
 from plantkeeper.infrastructure.config import Settings
-from plantkeeper.infrastructure.contracts.catalogue import SchemaStub, catalogue_extension
+from plantkeeper.infrastructure.contracts.catalogue import (
+    SchemaStub,
+    add_envelope_headers,
+    catalogue_extension,
+)
 from plantkeeper.workers.consumers import register_consumers, register_telemetry_ingest
 
 CATALOGUE_KEY = "x-plantkeeper-event-catalogue"
@@ -106,7 +110,7 @@ def build_document(
         document[CATALOGUE_KEY] = catalogue_extension()
     else:
         document[CATALOGUE_KEY] = {**catalogue, "description": CATALOGUE_DESCRIPTION}
-    return document
+    return add_envelope_headers(document)
 
 
 def render(document: dict[str, object]) -> str:

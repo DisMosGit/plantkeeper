@@ -42,7 +42,18 @@ from plantkeeper.application.sagas.registry import (
     saga_type_named,
 )
 from plantkeeper.domain.base import DomainEvent
-from plantkeeper.infrastructure.messaging.topics import EVENT_TOPICS, EVENT_TYPES
+from plantkeeper.infrastructure.messaging.topics import (
+    EVENT_TOPICS,
+    EVENT_TYPES,
+    HEADER_CAUSATION_ID,
+    HEADER_CORRELATION_ID,
+    HEADER_EVENT_ID,
+    HEADER_EVENT_NAME,
+    HEADER_OCCURRED_AT,
+    HEADER_RAISED_BY,
+    HEADER_SCHEMA_VERSION,
+    HEADER_TRACEPARENT,
+)
 
 EVENT_CONTEXTS: Final[dict[str, str]] = {
     "garden": "Garden",
@@ -245,6 +256,99 @@ def catalogue_extension[EventT: DomainEvent, HandlerT: object](
         ),
         "events": catalogue_rows(projections),
     }
+
+
+def envelope_headers() -> dict[str, object]:
+    """Return the message envelope's headers, as an AsyncAPI header schema.
+
+    FastStream derives a channel's messages from the broker routes the code
+    registers, and a Kafka subscriber declares no header model — the headers are
+    read out of the raw delivery by ``plantkeeper.infrastructure.messaging.
+    decoding``, not by the router. A generated document would therefore describe a
+    message as "a payload and a correlation identifier" and say nothing about the
+    envelope the platform actually writes (``docs/events.md``, ADR 0010).
+
+    This is that missing half, derived from the same constants the publisher
+    writes with (``headers_for``) rather than restated: rename a header in
+    ``topics`` and the document changes with it.
+
+    ``required`` is deliberately the three headers a consumer cannot work without
+    — the name and identifier it deserialises and deduplicates by, and the schema
+    version it branches on. The provenance is required of new messages but
+    *tolerated* missing on old ones, so it is described and not demanded.
+    """
+    return {
+        "type": "object",
+        "description": (
+            "The PlantKeeper message envelope. The body is the event document and "
+            "everything else travels here. Absent provenance is read as an unknown "
+            "origin rather than refused."
+        ),
+        "properties": {
+            HEADER_EVENT_NAME: {
+                "type": "string",
+                "description": "The event's class name, as the catalogue names it.",
+            },
+            HEADER_EVENT_ID: {
+                "type": "string",
+                "format": "uuid",
+                "description": "The event's identifier; a consumer deduplicates on it.",
+            },
+            HEADER_SCHEMA_VERSION: {
+                "type": "integer",
+                "minimum": 1,
+                "description": "The version of the event document in the body.",
+            },
+            HEADER_RAISED_BY: {
+                "type": "string",
+                "description": (
+                    "The component that raised it: `user:<id>`, `system:<job>`, "
+                    "`saga:<id>` or `service:<name>`."
+                ),
+            },
+            HEADER_CORRELATION_ID: {
+                "type": "string",
+                "format": "uuid",
+                "description": "The conversation every event of one request or saga shares.",
+            },
+            HEADER_CAUSATION_ID: {
+                "type": "string",
+                "format": "uuid",
+                "description": "The `event_id` of the message that caused this one.",
+            },
+            HEADER_TRACEPARENT: {
+                "type": "string",
+                "description": "The W3C trace context, carried through opaquely.",
+            },
+            HEADER_OCCURRED_AT: {
+                "type": "string",
+                "format": "date-time",
+                "description": "When the edge observed the work, shared by one delivery's events.",
+            },
+        },
+        "required": [HEADER_EVENT_NAME, HEADER_EVENT_ID, HEADER_SCHEMA_VERSION],
+    }
+
+
+def add_envelope_headers(document: dict[str, object]) -> dict[str, object]:
+    """Attach :func:`envelope_headers` to every message of an AsyncAPI document.
+
+    The document is modified in place and returned, so a generator can wrap its
+    ``to_jsonable()`` result in one call. Messages live under
+    ``components.messages``; a document without that section is returned
+    untouched rather than raising, because a broker with no routes legitimately
+    has no messages.
+    """
+    components = document.get("components")
+    if not isinstance(components, dict):
+        return document
+    messages = components.get("messages")
+    if not isinstance(messages, dict):
+        return document
+    for message in messages.values():
+        if isinstance(message, dict):
+            message["headers"] = envelope_headers()
+    return document
 
 
 def event_flow_diagram[EventT: DomainEvent, HandlerT: object](

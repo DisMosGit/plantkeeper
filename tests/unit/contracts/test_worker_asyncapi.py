@@ -21,9 +21,21 @@ from pathlib import Path
 from plantkeeper.admin.asyncapi import build_document as build_admin_document
 from plantkeeper.application.sagas.registry import WORKER_CONSUMER_TYPES
 from plantkeeper.infrastructure.config import Settings
-from plantkeeper.infrastructure.messaging.topics import EVENT_TOPICS
+from plantkeeper.infrastructure.messaging.topics import (
+    EVENT_TOPICS,
+    HEADER_EVENT_ID,
+    HEADER_EVENT_NAME,
+    HEADER_SCHEMA_VERSION,
+    PROVENANCE_HEADERS,
+)
 from plantkeeper.workers.asyncapi import CATALOGUE_KEY, VERSION, build_document, read_catalogue
 from plantkeeper.workers.consumers import topics_for
+
+ENVELOPE_HEADERS = frozenset(PROVENANCE_HEADERS) | {HEADER_EVENT_NAME, HEADER_EVENT_ID}
+"""Every header the relay writes onto a message (``docs/events.md``)."""
+
+REQUIRED_HEADERS = [HEADER_EVENT_NAME, HEADER_EVENT_ID, HEADER_SCHEMA_VERSION]
+"""The three a consumer cannot work without: type, identity and schema version."""
 
 
 def platform_catalogue(settings: Settings) -> dict[str, object]:
@@ -124,6 +136,29 @@ def test_a_document_built_without_a_catalogue_still_has_one() -> None:
     events = extension["events"]
     assert isinstance(events, list)
     assert {event["event_name"] for event in events} == {e.__name__ for e in EVENT_TOPICS}
+
+
+def test_every_message_declares_the_envelope_headers() -> None:
+    """The write side's messages must state the envelope its own relay writes.
+
+    ``OutboxRelay`` publishes the provenance headers; a generated document that
+    omitted them would describe a smaller contract than the platform has
+    (``docs/events.md``, ADR 0010).
+    """
+    document = build_document_without_warnings(Settings())
+    components = document["components"]
+    assert isinstance(components, dict)
+    messages = components["messages"]
+    assert isinstance(messages, dict)
+    assert messages
+    for name, message in messages.items():
+        assert isinstance(message, dict), name
+        headers = message["headers"]
+        assert isinstance(headers, dict), name
+        properties = headers["properties"]
+        assert isinstance(properties, dict), name
+        assert set(properties) == ENVELOPE_HEADERS, name
+        assert headers["required"] == REQUIRED_HEADERS, name
 
 
 def test_the_catalogue_can_be_handed_over_as_a_file(tmp_path: Path) -> None:

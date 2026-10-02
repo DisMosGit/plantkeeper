@@ -40,8 +40,9 @@ from faststream.kafka import KafkaBroker
 from faststream.specification.asyncapi import AsyncAPI
 
 from plantkeeper.infrastructure.config import Settings
-from plantkeeper.infrastructure.contracts.catalogue import catalogue_extension
+from plantkeeper.infrastructure.contracts.catalogue import add_envelope_headers, catalogue_extension
 from plantkeeper.infrastructure.contracts.diagrams import render_diagrams
+from plantkeeper.infrastructure.messaging.publisher import KafkaEventPublisher
 
 TITLE = "PlantKeeper read-side events"
 """The document's title, fixed so two runs produce the same bytes."""
@@ -84,7 +85,14 @@ def build_document(settings: Settings) -> dict[str, object]:
     from plantkeeper.admin.projections.subscriber import register_projections
 
     broker = KafkaBroker(settings.kafka_bootstrap_servers)
-    register_projections(broker, prefix=settings.read_side_consumer_group_prefix)
+    register_projections(
+        broker,
+        prefix=settings.read_side_consumer_group_prefix,
+        settings=settings,
+        # Never asked to publish anything: this broker is only inspected, and a
+        # subscription's handler is not called to render the document.
+        publisher=KafkaEventPublisher(broker),
+    )
     specification = AsyncAPI(
         broker,
         title=TITLE,
@@ -96,7 +104,7 @@ def build_document(settings: Settings) -> dict[str, object]:
     # The catalogue sees both halves: this process consumes the events, and the
     # producers are the components the write side's document names.
     document["x-plantkeeper-event-catalogue"] = catalogue_extension(ALL_PROJECTIONS)
-    return document
+    return add_envelope_headers(document)
 
 
 def render(document: dict[str, object]) -> str:
