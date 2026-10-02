@@ -21,12 +21,24 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # --- Postgres -------------------------------------------------------------
+    # --- Postgres (write instance) --------------------------------------------
     postgres_user: str = "plantkeeper"
     postgres_password: str = "plantkeeper"
     postgres_db: str = "plantkeeper"
     postgres_host: str = "localhost"
     postgres_port: int = 5432
+
+    # --- Postgres (read instance) ---------------------------------------------
+    # The read side's own instance holds ``read_analytics`` (and, later, the
+    # telemetry read models). It is configured exactly like the write instance, so
+    # pointing these five variables at the write instance's values collapses the
+    # split into one database — that is the whole rollback, and the reason the two
+    # URLs are settings rather than code.
+    read_postgres_user: str = "plantkeeper"
+    read_postgres_password: str = "plantkeeper"
+    read_postgres_db: str = "plantkeeper"
+    read_postgres_host: str = "localhost"
+    read_postgres_port: int = 5433
 
     # --- Kafka ----------------------------------------------------------------
     kafka_bootstrap_servers: str = "localhost:9092"
@@ -40,6 +52,40 @@ class Settings(BaseSettings):
     outbox_max_attempts: int = 5
     outbox_retry_initial_wait_seconds: float = 0.5
     outbox_retry_max_wait_seconds: float = 10.0
+    outbox_claim_lease_seconds: int = 60
+    """How long one relay's claim on a row survives without being refreshed.
+
+    Long enough that a relay still publishing a slow batch is not overtaken,
+    short enough that a relay killed mid-publish lets the next poll pick the row
+    up again. A second relay starts claiming rows only once the first one's lease
+    has expired, which is what makes overlapping deploys safe.
+    """
+
+    # --- Recorded cross-context commands --------------------------------------
+    intent_dispatch_interval_seconds: float = 1.0
+    intent_dispatch_batch_size: int = 50
+    intent_max_attempts: int = 5
+    """Failed executions before a recorded command is parked for an operator."""
+    intent_claim_lease_seconds: int = 60
+    """How long a dispatcher's claim on an intent survives without being refreshed.
+
+    Its own lease rather than the outbox's: the two are different tables with
+    different work behind them, and a dispatcher that died mid-execution should not
+    have to wait out the relay's window.
+    """
+
+    # --- Consumers: retries and the dead-letter topic -------------------------
+    # A consumer that raises is classified before it is retried
+    # (``plantkeeper.application.delivery``): a broken domain rule is moved aside
+    # at once, and anything else is retried this many times with an exponential
+    # backoff and moved aside when the budget is spent. Both subscriber sets — the
+    # worker's consumers and Django's projections — read these.
+    consumer_max_attempts: int = 3
+    """Total attempts per delivery, the first one included."""
+    consumer_retry_initial_wait_seconds: float = 0.5
+    """How long to wait after the first failed attempt; doubled after each one."""
+    consumer_retry_max_wait_seconds: float = 10.0
+    """The ceiling on that wait, so a slow failure does not sleep for hours."""
 
     # --- Read side ------------------------------------------------------------
     # Every projection gets its own consumer group (``<prefix>-garden``, …), so
@@ -84,6 +130,24 @@ class Settings(BaseSettings):
 
     telemetry_partition_check_interval_seconds: float = 86400.0
     """How often the partition job looks for a month that is about to need one."""
+
+    telemetry_retention_months: int = 12
+    """How long raw readings are kept, in whole months.
+
+    The documented retention window (``docs/telemetry.md``): the partition job drops
+    the partition of every month that lies entirely beyond it, which is the whole
+    point of partitioning by month. The rollups are not affected — they live on the
+    read instance and outlive the rows they were computed from.
+    """
+
+    sensor_silence_check_interval_seconds: float = 60.0
+    """How often the silence timer looks for a sensor that has gone quiet.
+
+    Short compared to the silence period (``Sensor.OFFLINE_AFTER``, ten minutes) for
+    the same reason the missed-care tick is short compared to its grace period: a
+    late tick delays the announcement, it never misses it, and the announcement is
+    once per silence however often the tick runs.
+    """
 
     # --- Catalog: Trefle ACL (Phase 9) ----------------------------------------
     trefle_token: str = ""
@@ -137,4 +201,18 @@ class Settings(BaseSettings):
         return (
             f"postgresql+asyncpg://{user}:{password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
+
+    @property
+    def read_postgres_dsn(self) -> str:
+        """The SQLAlchemy URL of the read database.
+
+        The read-only engine the query side opens is built from this; Django
+        builds its own connection from the same five ``READ_POSTGRES_*`` values.
+        """
+        user = quote_plus(self.read_postgres_user)
+        password = quote_plus(self.read_postgres_password)
+        return (
+            f"postgresql+asyncpg://{user}:{password}"
+            f"@{self.read_postgres_host}:{self.read_postgres_port}/{self.read_postgres_db}"
         )

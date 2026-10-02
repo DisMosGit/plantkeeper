@@ -11,8 +11,11 @@ from __future__ import annotations
 from dishka import Provider, Scope, make_async_container, provide
 
 from plantkeeper.application.commands.garden import AddPlantHandler
+from plantkeeper.application.journal.consumer import JournalEntryConsumer
+from plantkeeper.application.notifications.consumer import NotificationConsumer
 from plantkeeper.application.ports.catalog import SpeciesCache, SpeciesRecord, SpeciesSource
 from plantkeeper.application.ports.clock import Clock
+from plantkeeper.application.ports.dead_letter import DeadLetterPublisher
 from plantkeeper.application.ports.repositories import PlantRepository
 from plantkeeper.application.ports.unit_of_work import UnitOfWork
 from plantkeeper.application.queries.catalog import GetSpeciesQueryHandler
@@ -73,6 +76,44 @@ async def test_the_api_container_builds_the_cached_catalogue_query() -> None:
 
         assert isinstance(handler, GetSpeciesQueryHandler)
         assert isinstance(cache, SpeciesCache)
+    finally:
+        await container.close()
+
+
+async def test_the_worker_container_builds_both_reference_consumers() -> None:
+    """The two reference ports share a shape, so each context names its own.
+
+    Both consumers take a ``plant_refs`` repository, and Dishka keys a factory by
+    its return type alone: with one port type the last registration answers for
+    both, and a reminder is quietly addressed from the journal's table. Resolving
+    them here fails loudly if a provider is renamed, removed or collapsed back into
+    the shared port, instead of at delivery time.
+    """
+    container = make_async_container(*worker_providers())
+    try:
+        async with container() as request_container:
+            notifications = await request_container.get(NotificationConsumer)
+            journal = await request_container.get(JournalEntryConsumer)
+
+        assert isinstance(notifications, NotificationConsumer)
+        assert isinstance(journal, JournalEntryConsumer)
+    finally:
+        await container.close()
+
+
+async def test_the_worker_container_builds_the_dead_letter_publisher() -> None:
+    """A delivery the policy moves aside needs somewhere to copy it.
+
+    The publisher and the dead-letter publisher are the same thin wrapper behind
+    two ports, and Dishka keys a factory by its return type: registering one
+    factory for both would leave whichever port was named last unresolvable.
+    """
+    container = make_async_container(*worker_providers())
+    try:
+        async with container() as request_container:
+            publisher = await request_container.get(DeadLetterPublisher)
+
+        assert isinstance(publisher, DeadLetterPublisher)
     finally:
         await container.close()
 

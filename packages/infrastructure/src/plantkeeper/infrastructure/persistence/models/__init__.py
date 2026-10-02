@@ -23,6 +23,10 @@ from plantkeeper.infrastructure.persistence.models.journal import (
     JournalSnapshotModel,
 )
 from plantkeeper.infrastructure.persistence.models.notifications import NotificationModel
+from plantkeeper.infrastructure.persistence.models.plant_refs import (
+    JournalPlantReferenceModel,
+    NotificationPlantReferenceModel,
+)
 from plantkeeper.infrastructure.persistence.models.shared import (
     IdempotencyKeyModel,
     OutboxModel,
@@ -41,9 +45,11 @@ __all__ = (
     "HouseholdModel",
     "IdempotencyKeyModel",
     "JournalEntryModel",
+    "JournalPlantReferenceModel",
     "JournalSnapshotModel",
     "MissedCareWindowModel",
     "NotificationModel",
+    "NotificationPlantReferenceModel",
     "OutboxModel",
     "PlantModel",
     "ProcessedEventModel",
