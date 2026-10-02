@@ -8,9 +8,10 @@ relies on — and a fake would test the fake instead.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from plantkeeper.application.ports.idempotency import IdempotencyRecord
@@ -248,16 +249,20 @@ async def test_the_outbox_drains_once_and_marks_what_it_published(
 
     async with session_factory() as session:
         repository = SqlAlchemyOutboxRepository(session)
-        pending = await repository.fetch_unpublished(10)
+        pending = await repository.fetch_unpublished(10, lease_seconds=60)
         assert len(pending) == 1
         message: OutboxMessage = pending[0]
 
+        # A failed attempt keeps the row pending, so the relay releases its claim
+        # and the next poll picks the row up again — that is what stops a failing
+        # key from stalling for the whole lease.
         await repository.record_failure(message.outbox_id, "first attempt failed")
+        await repository.release_claim(message.outbox_id)
         await session.commit()
 
     async with session_factory() as session:
         repository = SqlAlchemyOutboxRepository(session)
-        retried = await repository.fetch_unpublished(10)
+        retried = await repository.fetch_unpublished(10, lease_seconds=60)
         assert retried[0].attempts == 1
 
         await repository.mark_published(message.outbox_id)
@@ -265,7 +270,7 @@ async def test_the_outbox_drains_once_and_marks_what_it_published(
 
     async with session_factory() as session:
         repository = SqlAlchemyOutboxRepository(session)
-        assert await repository.fetch_unpublished(10) == []
+        assert await repository.fetch_unpublished(10, lease_seconds=60) == []
 
 
 async def test_a_dead_lettered_message_is_not_retried(
@@ -281,13 +286,13 @@ async def test_a_dead_lettered_message_is_not_retried(
 
     async with session_factory() as session:
         repository = SqlAlchemyOutboxRepository(session)
-        message = (await repository.fetch_unpublished(10))[0]
+        message = (await repository.fetch_unpublished(10, lease_seconds=60))[0]
         await repository.dead_letter(message.outbox_id, "gave up")
         await session.commit()
 
     async with session_factory() as session:
         repository = SqlAlchemyOutboxRepository(session)
-        assert await repository.fetch_unpublished(10) == []
+        assert await repository.fetch_unpublished(10, lease_seconds=60) == []
 
 
 async def test_an_idempotency_record_is_stored_and_read_back(
@@ -623,3 +628,170 @@ async def test_a_journal_entry_round_trips_through_the_repository(
     async with session_factory() as session:
         uow = SqlAlchemyUnitOfWork(session)
         assert await uow.journal_entries.get(earlier_id) is None
+
+
+# ---------------------------------------------------------------------------
+# Claiming and the ordering barrier
+# ---------------------------------------------------------------------------
+
+
+async def append_events(
+    session_factory: async_sessionmaker[AsyncSession], count: int, *, name: str = "Fern"
+) -> None:
+    """Append ``count`` plant events for one household, in one transaction."""
+    async with session_factory() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        async with uow:
+            household = Household.create(name="Home")
+            await uow.households.add(household)
+            for index in range(count):
+                await uow.plants.add(a_plant(household.id, name=f"{name}-{index}"))
+            await uow.commit()
+
+
+async def test_two_concurrent_fetchers_never_claim_the_same_row(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """The claim is what lets several relays run at once during a deploy.
+
+    Two genuinely separate sessions, because that is what two relays are: they do
+    not share a transaction, and only the lease makes them disjoint.
+    """
+    await append_events(session_factory, 3)
+
+    # Relay one polls and commits its claims, as it does before publishing.
+    async with session_factory() as first_session:
+        first = SqlAlchemyOutboxRepository(first_session)
+        claimed_by_first = await first.fetch_unpublished(10, lease_seconds=60)
+        await first_session.commit()
+    assert len(claimed_by_first) == 3
+
+    # Relay two polls while relay one's lease is live.
+    async with session_factory() as second_session:
+        second = SqlAlchemyOutboxRepository(second_session)
+        claimed_by_second = await second.fetch_unpublished(10, lease_seconds=60)
+        await second_session.rollback()
+    assert claimed_by_second == []
+
+    # Once relay one releases its claims — published or failed, either way — the
+    # rows are claimable again.
+    async with session_factory() as release_session:
+        release = SqlAlchemyOutboxRepository(release_session)
+        for message in claimed_by_first:
+            await release.release_claim(message.outbox_id)
+        await release_session.commit()
+
+    async with session_factory() as second_session:
+        second = SqlAlchemyOutboxRepository(second_session)
+        reclaimed = await second.fetch_unpublished(10, lease_seconds=60)
+        await second_session.rollback()
+    assert sorted(m.outbox_id for m in reclaimed) == sorted(m.outbox_id for m in claimed_by_first)
+    assert {m.outbox_id for m in claimed_by_first}.isdisjoint(
+        {m.outbox_id for m in claimed_by_second}
+    )
+
+
+async def test_a_crashed_lease_is_reclaimed(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A relay that dies mid-publish must not strand its rows.
+
+    The claim is aged past its lease rather than waited out, so the test does not
+    sleep for the production lease length.
+    """
+    await append_events(session_factory, 1)
+
+    async with session_factory() as session:
+        repository = SqlAlchemyOutboxRepository(session)
+        claimed = await repository.fetch_unpublished(10, lease_seconds=60)
+        assert len(claimed) == 1
+        # Stand in for a relay that died: the claim is committed, then ages out.
+        await session.execute(
+            update(OutboxModel)
+            .where(OutboxModel.id == claimed[0].outbox_id)
+            .values(claimed_at=func.now() - text("interval '10 minutes'"))
+        )
+        await session.commit()
+
+    async with session_factory() as session:
+        repository = SqlAlchemyOutboxRepository(session)
+        reclaimed = await repository.fetch_unpublished(10, lease_seconds=60)
+        assert [m.outbox_id for m in reclaimed] == [claimed[0].outbox_id]
+        await session.rollback()
+
+
+async def test_a_live_lease_is_not_reclaimed(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A claim inside its lease is left alone, whatever the lease length."""
+    await append_events(session_factory, 1)
+
+    async with session_factory() as session:
+        repository = SqlAlchemyOutboxRepository(session)
+        claimed = await repository.fetch_unpublished(10, lease_seconds=60)
+        assert len(claimed) == 1
+        await session.commit()
+
+    async with session_factory() as session:
+        repository = SqlAlchemyOutboxRepository(session)
+        assert await repository.fetch_unpublished(10, lease_seconds=60) == []
+        await session.rollback()
+
+
+async def test_the_ordering_barrier_holds_back_one_key_without_stopping_others(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A pending message blocks the later messages of its key, and nothing else.
+
+    Two plants each get two events, interleaved so the second of each key is newer
+    than the first of the other. Publishing the oldest row of one key has to free
+    that key while its sibling key's older row keeps holding its own successor back.
+    """
+    async with session_factory() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        async with uow:
+            household = Household.create(name="Home")
+            await uow.households.add(household)
+            first = a_plant(household.id, name="First")
+            second = a_plant(household.id, name="Second")
+            await uow.plants.add(first)
+            await uow.plants.add(second)
+            await uow.commit()
+    first_key, second_key = str(first.id), str(second.id)
+
+    async with session_factory() as session:
+        repository = SqlAlchemyOutboxRepository(session)
+        pending = await repository.fetch_unpublished(10, lease_seconds=60)
+        assert {row.partition_key for row in pending} == {first_key, second_key}
+        await repository.release_claim(pending[0].outbox_id)
+        await session.rollback()
+
+    # Publish only the *first* plant's row: its key is now free, the second
+    # plant's row is still pending and still holds its own key.
+    async with session_factory() as session:
+        repository = SqlAlchemyOutboxRepository(session)
+        pending = await repository.fetch_unpublished(10, lease_seconds=60)
+        oldest_of_first = next(row for row in pending if row.partition_key == first_key)
+        await repository.mark_published(oldest_of_first.outbox_id)
+        await repository.release_claim(oldest_of_first.outbox_id)
+        await session.commit()
+
+    # Append a *newer* event for each key.
+    async with session_factory() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        async with uow:
+            for plant_id in (first_key, second_key):
+                plant = await uow.plants.get(PlantId(UUID(plant_id)))
+                assert plant is not None
+                plant.move(location=Location(value="Windowsill"), now=NOW)
+                await uow.plants.save(plant)
+            await uow.commit()
+
+    async with session_factory() as session:
+        repository = SqlAlchemyOutboxRepository(session)
+        publishable = await repository.fetch_unpublished(10, lease_seconds=60)
+        await session.rollback()
+
+    # The first key's successor is publishable; the second key's is not, because
+    # the second plant's *older* row has not been published or abandoned.
+    assert [row.partition_key for row in publishable] == [first_key]

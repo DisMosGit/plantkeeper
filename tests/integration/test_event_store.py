@@ -219,7 +219,7 @@ async def test_recording_an_entry_stores_the_event_the_outbox_row_and_the_mirror
         uow = SqlAlchemyUnitOfWork(session)
         stored = await uow.event_store.load_stream(plant_id)
         mirror = await uow.journal_entries.get(entry_id)
-        events = await uow.outbox.fetch_unpublished(limit=10)
+        events = await uow.outbox.fetch_unpublished(limit=10, lease_seconds=60)
 
     assert [row.version for row in stored] == [1]
     assert isinstance(stored[0].event, JournalEntryAdded)

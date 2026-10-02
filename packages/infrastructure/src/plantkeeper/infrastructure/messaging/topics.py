@@ -42,6 +42,8 @@ from plantkeeper.domain.saga.events import (
     SagaCompensated,
     SagaCompleted,
     SagaFailed,
+    SagaParked,
+    SagaRetrying,
     SagaStarted,
 )
 from plantkeeper.domain.telemetry.events import (
@@ -105,6 +107,8 @@ EVENT_TOPICS: Final[dict[type[DomainEvent], str]] = {
     SagaCompleted: SAGA_EVENTS,
     SagaFailed: SAGA_EVENTS,
     SagaCompensated: SAGA_EVENTS,
+    SagaRetrying: SAGA_EVENTS,
+    SagaParked: SAGA_EVENTS,
 }
 """The topic of every event in ``docs/events.md``."""
 
@@ -117,7 +121,13 @@ carries every event of its context.
 """
 
 DLQ_TOPIC: Final = "plantkeeper.dlq.v1"
-"""Where the relay copies a message that exhausted its publish attempts."""
+"""Where a message that exhausted its attempts is copied.
+
+One topic for both writers: the relay abandons a row it could not publish, and a
+consumer moves aside a delivery it could not handle. Both copies carry
+``original_topic`` and ``error``; a consumer's also names the ``consumer_group``,
+so ``tools/dlq.py`` can clear the right ledger claim before replaying it.
+"""
 
 PARTITION_KEY_FIELDS: Final = ("plant_id", "household_id", "species_id", "sensor_id", "saga_id")
 """Payload fields tried, in order, when deriving a message key.
@@ -130,6 +140,48 @@ HEADER_EVENT_NAME: Final = "event_name"
 HEADER_EVENT_ID: Final = "event_id"
 HEADER_ORIGINAL_TOPIC: Final = "original_topic"
 HEADER_ERROR: Final = "error"
+HEADER_CONSUMER_GROUP: Final = "consumer_group"
+"""Which consumer group moved a dead-lettered delivery aside.
+
+The relay's copies carry ``original_topic`` and ``error`` because a row belongs to
+no group; a consumer's copies name the group as well, because a replay has to
+clear that group's ledger claim — the only thing that stops the redelivery from
+being recognised as a duplicate. See ``tools/dlq.py``.
+"""
+
+# Provenance. Every published message carries these beside ``event_name`` and
+# ``event_id``, so a chain of reactions can be followed from any link and an
+# event's origin is never anonymous (``docs/events.md``, ADR 0010).
+HEADER_CORRELATION_ID: Final = "correlation_id"
+HEADER_CAUSATION_ID: Final = "causation_id"
+HEADER_RAISED_BY: Final = "raised_by"
+HEADER_SCHEMA_VERSION: Final = "schema_version"
+HEADER_TRACEPARENT: Final = "traceparent"
+HEADER_OCCURRED_AT: Final = "occurred_at"
+"""When the edge that raised the event observed it.
+
+Distinct from the body's own ``occurred_at``: the body's is the aggregate's
+instant, this is the delivery's. A consumer propagates *this* one, so the events
+one handler raises share an instant even when the aggregates that produced them
+were touched at different times.
+"""
+
+PROVENANCE_HEADERS: Final = (
+    HEADER_CORRELATION_ID,
+    HEADER_CAUSATION_ID,
+    HEADER_RAISED_BY,
+    HEADER_SCHEMA_VERSION,
+    HEADER_TRACEPARENT,
+    HEADER_OCCURRED_AT,
+)
+"""The provenance header names, for a test or a contract to assert the whole set."""
+
+# The HTTP header a client or an upstream proxy uses to join a trace. Carried
+# opaquely: the platform runs no tracer, it only passes the value through.
+TRACEPARENT_HTTP_HEADER: Final = "traceparent"
+
+CORRELATION_HTTP_HEADER: Final = "x-correlation-id"
+"""The HTTP header a client may send to join an existing conversation."""
 
 
 class UnmappedEventError(Exception):

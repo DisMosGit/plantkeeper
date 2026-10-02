@@ -9,6 +9,7 @@ with fakes so the policy is pinned without a container.
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from typing import cast
 from uuid import uuid7
 
@@ -17,8 +18,19 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from plantkeeper.application.ports.outbox import OutboxMessage
 from plantkeeper.infrastructure.config import Settings
+from plantkeeper.infrastructure.messaging.publisher import headers_for
 from plantkeeper.infrastructure.messaging.relay import PUBLISH_ATTEMPTS_PER_CYCLE, OutboxRelay
-from plantkeeper.infrastructure.messaging.topics import GARDEN_EVENTS
+from plantkeeper.infrastructure.messaging.topics import (
+    GARDEN_EVENTS,
+    HEADER_CAUSATION_ID,
+    HEADER_CORRELATION_ID,
+    HEADER_EVENT_ID,
+    HEADER_EVENT_NAME,
+    HEADER_OCCURRED_AT,
+    HEADER_RAISED_BY,
+    HEADER_SCHEMA_VERSION,
+    HEADER_TRACEPARENT,
+)
 
 SETTINGS = Settings(
     outbox_max_attempts=5,
@@ -74,14 +86,19 @@ class FakeOutboxRepository:
         self.published_ids: list[int] = []
         self.failures: list[tuple[int, str]] = []
         self.dead_lettered: list[tuple[int, str]] = []
+        self.released: list[int] = []
 
     async def append(self, event: object) -> None:
         """Unused by the relay."""
         raise NotImplementedError
 
-    async def fetch_unpublished(self, limit: int) -> list[OutboxMessage]:
+    async def fetch_unpublished(self, limit: int, *, lease_seconds: int) -> list[OutboxMessage]:
         """Unused by the delivery policy."""
         raise NotImplementedError
+
+    async def release_claim(self, outbox_id: int) -> None:
+        """Record that the lease was given back."""
+        self.released.append(outbox_id)
 
     async def mark_published(self, outbox_id: int) -> None:
         """Record a successful publish."""
@@ -124,7 +141,32 @@ async def test_a_published_message_is_marked_and_committed() -> None:
     assert failed is False
     assert repository.published_ids == [7]
     assert repository.failures == []
+    assert repository.released == [7]
     assert committer.calls == 1
+
+
+async def test_a_failed_message_releases_its_claim() -> None:
+    publisher = FakePublisher(failures=PUBLISH_ATTEMPTS_PER_CYCLE)
+    repository = FakeOutboxRepository()
+
+    await relay_with(publisher).deliver(repository, a_message(), FakeCommitter())
+
+    # Releasing the claim on failure is what stops a failing key from being held
+    # back for the rest of the lease: the row stays pending, so the ordering
+    # barrier keeps blocking its successors until the row is published or
+    # abandoned, but the next poll may already retry it.
+    assert repository.released == [7]
+
+
+async def test_a_dead_lettered_message_releases_its_claim() -> None:
+    publisher = FakePublisher(failures=PUBLISH_ATTEMPTS_PER_CYCLE)
+    repository = FakeOutboxRepository()
+    message = a_message(attempts=SETTINGS.outbox_max_attempts - 1)
+
+    await relay_with(publisher).deliver(repository, message, FakeCommitter())
+
+    assert repository.dead_lettered == [(7, "RuntimeError: broker unavailable")]
+    assert repository.released == [7]
 
 
 async def test_a_transient_failure_is_retried_within_the_poll() -> None:
@@ -198,3 +240,44 @@ async def test_run_returns_promptly_once_stopped(
 
     assert polls > 0
     assert task.done()
+
+
+def test_the_publisher_emits_the_whole_provenance_header_set() -> None:
+    correlation_id = uuid7()
+    causation_id = uuid7()
+    observed_at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    message = OutboxMessage(
+        outbox_id=1,
+        event_id=uuid7(),
+        event_name="PlantAdded",
+        topic=GARDEN_EVENTS,
+        partition_key="plant-1",
+        payload={},
+        attempts=0,
+        schema_version=2,
+        raised_by="user:someone",
+        correlation_id=correlation_id,
+        causation_id=causation_id,
+        traceparent="00-trace-span-01",
+        observed_at=observed_at,
+    )
+
+    headers = headers_for(message)
+
+    assert headers[HEADER_EVENT_NAME] == "PlantAdded"
+    assert headers[HEADER_EVENT_ID] == str(message.event_id)
+    assert headers[HEADER_SCHEMA_VERSION] == "2"
+    assert headers[HEADER_CORRELATION_ID] == str(correlation_id)
+    assert headers[HEADER_CAUSATION_ID] == str(causation_id)
+    assert headers[HEADER_RAISED_BY] == "user:someone"
+    assert headers[HEADER_TRACEPARENT] == "00-trace-span-01"
+    assert headers[HEADER_OCCURRED_AT] == observed_at.isoformat()
+
+
+def test_a_message_without_provenance_omits_the_provenance_headers() -> None:
+    message = a_message()
+
+    headers = headers_for(message)
+
+    assert set(headers) == {HEADER_EVENT_NAME, HEADER_EVENT_ID, HEADER_SCHEMA_VERSION}
+    assert headers[HEADER_SCHEMA_VERSION] == "1"

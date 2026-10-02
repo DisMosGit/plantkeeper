@@ -46,6 +46,8 @@ from plantkeeper.domain.saga.events import (
     SagaCompensated,
     SagaCompleted,
     SagaFailed,
+    SagaParked,
+    SagaRetrying,
     SagaStarted,
 )
 from plantkeeper.domain.telemetry.events import (
@@ -169,11 +171,21 @@ EVENT_SAMPLES: list[DomainEvent] = [
     SagaCompleted(saga_id=SAGA, saga_name="OnboardPlantSaga", occurred_at=NOW),
     SagaFailed(saga_id=SAGA, saga_name="OnboardPlantSaga", error="boom", occurred_at=NOW),
     SagaCompensated(saga_id=SAGA, saga_name="OnboardPlantSaga", occurred_at=NOW),
+    SagaRetrying(
+        saga_id=SAGA, saga_name="OnboardPlantSaga", attempt=1, error="boom", occurred_at=NOW
+    ),
+    SagaParked(
+        saga_id=SAGA,
+        saga_name="OnboardPlantSaga",
+        attempts=5,
+        error="budget spent",
+        occurred_at=NOW,
+    ),
 ]
 
 
 def test_every_catalogued_event_has_a_topic() -> None:
-    assert len(EVENT_SAMPLES) == 26
+    assert len(EVENT_SAMPLES) == 28
     assert {type(event) for event in EVENT_SAMPLES} == set(EVENT_TOPICS)
 
 

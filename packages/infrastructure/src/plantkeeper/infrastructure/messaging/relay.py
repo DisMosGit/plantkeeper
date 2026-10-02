@@ -4,15 +4,25 @@ The relay polls the outbox with its **own** session, never with a request's
 session: reading rows the write side has not committed yet would defeat the
 atomicity the outbox exists for.
 
+Several relays may run at once — they do during a rolling deploy — so the poll
+*claims* the rows it takes (:meth:`OutboxRepository.fetch_unpublished`), and the
+query hands back only rows that are publishable: nothing older shares their
+partition key and still needs publishing. That filter is the ordering barrier. A
+message that fails therefore holds back its successors on the same key instead of
+letting them overtake it, and the hold is released when the message is published
+or abandoned. Another key is unaffected, and the relay is never idle because of
+one stuck key.
+
 Failure handling has three layers, and they are deliberately different:
 
 * ``tenacity`` smooths a transient broker blip inside one poll;
 * the ``attempts`` column counts *failed polls*, so a process restart or a long
   broker outage does not lose the failure count;
 * after ``outbox_max_attempts`` the message is copied to the dead-letter topic
-  and the row is marked, which stops the relay retrying it forever. If the copy
-  itself fails the row is counted as a failure instead, so a message is never
-  dropped silently.
+  and the row is marked, which both stops the relay retrying it forever and
+  releases its key to the messages waiting behind it. If the copy itself fails
+  the row is counted as a failure instead, so a message is never dropped
+  silently.
 
 Delivery is at-least-once. A crash between Kafka accepting a message and the
 ``published_at`` update republishes it on the next poll; consumers deduplicate on
@@ -83,16 +93,23 @@ class OutboxRelay:
             await self._wait()
 
     async def run_once(self) -> int:
-        """Publish one batch and return how many messages could not be published.
+        """Publish one claimed batch and return how many messages could not be published.
 
         Each message is committed on its own: in a shared batch, one poison
         message would either hold back the messages after it or make them be
-        re-published after a restart.
+        re-published after a restart. The whole batch is claimed before the first
+        publish, and the claim is committed with the first outcome — so a relay
+        that dies mid-batch leaves its unprocessed rows leased until the lease
+        expires rather than immediately claimable by a second relay, which is what
+        stops two relays from publishing the same row at the same instant.
         """
         failed = 0
         async with self._session_factory() as session:
             repository = SqlAlchemyOutboxRepository(session)
-            messages = await repository.fetch_unpublished(self._settings.outbox_batch_size)
+            messages = await repository.fetch_unpublished(
+                self._settings.outbox_batch_size,
+                lease_seconds=self._settings.outbox_claim_lease_seconds,
+            )
             for message in messages:
                 if await self.deliver(repository, message, session.commit):
                     failed += 1
@@ -109,6 +126,17 @@ class OutboxRelay:
         Public rather than private because this is where the retry and
         dead-letter policy lives, and a unit test should be able to drive it
         without a database.
+
+        The claim is released in *both* outcomes, once the outcome is recorded.
+        The lease exists to stop two relays publishing the same row at the same
+        instant, and that race is over as soon as the attempt's result is
+        committed. Holding a failed row's lease for the rest of its term would
+        instead stall its partition key — the row still counts as pending, so the
+        ordering barrier still blocks its successors — for a reason that has
+        nothing to do with the race the lease guards. A row that keeps failing is
+        retried on the next poll, paced by the relay's own backoff, and abandoned
+        to the dead-letter topic once its budget runs out, which is what releases
+        the key for good.
         """
         failed = True
         try:
@@ -119,6 +147,7 @@ class OutboxRelay:
             failed = False
             await repository.mark_published(message.outbox_id)
             logger.debug("published outbox message %s to %s", message.event_id, message.topic)
+        await repository.release_claim(message.outbox_id)
         await commit()
         return failed
 

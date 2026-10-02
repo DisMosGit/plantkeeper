@@ -48,12 +48,27 @@ from plantkeeper.infrastructure.persistence.schemas import WRITE_SHARED
 
 
 class OutboxModel(Base):
-    """The ``write_shared.outbox`` table."""
+    """The ``write_shared.outbox`` table.
+
+    Provenance columns (``correlation_id``, ``causation_id``, ``raised_by``,
+    ``schema_version``, ``traceparent``) are frozen here, beside the topic and
+    the partition key, so the relay emits what the write side decided and never
+    re-derives it. ``claimed_at`` is the relay's lease: several relays may run at
+    once, and a lease that stops being refreshed is reclaimable.
+    """
 
     __tablename__ = "outbox"
     __table_args__ = (
         Index(
             "ix_outbox_unpublished",
+            "id",
+            postgresql_where=text("published_at IS NULL AND dead_lettered_at IS NULL"),
+        ),
+        # The ordering barrier filters on the partition key, so the claim query
+        # needs the key beside the ordering column.
+        Index(
+            "ix_outbox_partition_key_pending",
+            "partition_key",
             "id",
             postgresql_where=text("published_at IS NULL AND dead_lettered_at IS NULL"),
         ),
@@ -76,6 +91,14 @@ class OutboxModel(Base):
     )
     attempts: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    schema_version: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, server_default=text("1")
+    )
+    raised_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    correlation_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    causation_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    traceparent: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class IdempotencyKeyModel(Base):
@@ -180,5 +203,45 @@ class ProcessedEventModel(Base):
     consumer_group: Mapped[str] = mapped_column(String(100), nullable=False)
     event_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     processed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class SagaIntentModel(Base):
+    """The ``write_shared.saga_intents`` table: recorded cross-context commands.
+
+    A process manager that needs a context it does not own writes a row here, in
+    the same transaction as its own checkpoint, and the command dispatcher runs it
+    later through the owning context's handler. The row *is* the hand-off, so its
+    ``(status, id)`` index is what the dispatcher's claim query walks and the
+    ``idempotency_key`` unique constraint is what makes a re-execution a no-op.
+
+    See ``docs/adr/0012-saga-command-dispatch.md``.
+    """
+
+    __tablename__ = "saga_intents"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_saga_intents_idempotency_key"),
+        Index(
+            "ix_saga_intents_pending",
+            "id",
+            postgresql_where=text("status IN ('pending', 'failed')"),
+        ),
+        Index("ix_saga_intents_saga_id", "saga_id", "step_no"),
+        {"schema": WRITE_SHARED},
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    saga_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    step_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    command_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    payload: Mapped[dict[str, JsonValue]] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    attempts: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
