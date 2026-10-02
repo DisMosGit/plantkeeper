@@ -17,6 +17,7 @@ from dishka.integrations.fastapi import inject
 from fastapi import Depends, Request
 
 from plantkeeper.api.mediator import build_mediator
+from plantkeeper.application.notifications.stream import NotificationStreamService
 from plantkeeper.application.ports.notifications import NotificationChannel
 
 
@@ -49,3 +50,22 @@ async def get_notification_channel(
 
 NotificationChannelDep = Annotated[NotificationChannel, Depends(get_notification_channel)]
 """The notification channel, as a route parameter type."""
+
+
+@inject
+async def get_notification_stream(
+    stream: FromDishka[NotificationStreamService],
+) -> NotificationStreamService:
+    """Resolve the process's notification stream service.
+
+    A dependency rather than a direct ``FromDishka`` parameter on the route, for
+    the same reason as the channel: the router names an application-layer type
+    and the container decides what it is. The service is process-scoped on
+    purpose — its fan-out keeps one household signal subscription however many
+    streams are open — which a request-scoped dependency could not be.
+    """
+    return stream
+
+
+NotificationStreamDep = Annotated[NotificationStreamService, Depends(get_notification_stream)]
+"""The notification stream service, as a route parameter type."""

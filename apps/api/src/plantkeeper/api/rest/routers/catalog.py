@@ -21,9 +21,19 @@ from plantkeeper.domain.identifiers import SpeciesId
 router = APIRouter(prefix="/api/v1/catalog", tags=["catalog"])
 
 
-@router.get("/species", response_model=SpeciesCollectionResponse, summary="List the catalogue")
+@router.get(
+    "/species",
+    response_model=SpeciesCollectionResponse,
+    summary="List the catalogue",
+    description=(
+        "Answered from the read model the Species projection maintains, not from "
+        "the write store. A species just synchronised from Trefle may not be "
+        "listed until the projection has seen its event; "
+        "`GET /api/v1/catalog/species/{species_id}` stays on the write store."
+    ),
+)
 async def list_species(mediator: Mediator) -> SpeciesCollectionResponse:
-    """Return every species in the local catalogue."""
+    """Return every species in the local catalogue, from the read model."""
     view = view_of(await mediator.send(ListSpeciesQuery()), CollectionView[SpeciesView])
     return SpeciesCollectionResponse.from_view(view)
 

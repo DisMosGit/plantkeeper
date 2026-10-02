@@ -55,13 +55,25 @@ async def add_plant(
     return PlantResponse.from_view(view_of(await mediator.send(command), PlantView))
 
 
-@router.get("", response_model=PlantCollectionResponse, summary="List a household's plants")
+@router.get(
+    "",
+    response_model=PlantCollectionResponse,
+    summary="List a household's plants",
+    description=(
+        "Answered from the read model the Garden projection maintains, not from "
+        "the write store. The projections are asynchronous, so a plant added "
+        "moments ago may not be listed yet: the answer is eventually consistent "
+        "and reflects projected state. `GET /api/v1/plants/{plant_id}` — what a "
+        "client asks right after its own command — stays on the write store and "
+        "never lags."
+    ),
+)
 async def list_plants(
     mediator: Mediator,
     household_id: Annotated[UUID, Query(description="The household whose plants to list.")],
     include_removed: Annotated[bool, Query(description="Include removed plants.")] = False,
 ) -> PlantCollectionResponse:
-    """List the household's plants, oldest first."""
+    """List the household's plants, oldest first, from the read model."""
     query = ListPlantsQuery(
         household_id=HouseholdId(household_id),
         include_removed=include_removed,

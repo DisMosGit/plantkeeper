@@ -1,8 +1,12 @@
 """Journal endpoints: the whole timeline, and the journal as of a date.
 
-Both answers come from the event store. That is the point of Phase 6: the journal is
-append-only, so asking "what did it look like on any date" is a replay rather than a
-second table someone has to keep in step.
+The two questions are answered from two places. Browsing the timeline is a question
+about what the system looks like, so it comes from the ``journal_entries`` read
+model the ``JournalProjection`` maintains, and it shares that model's staleness
+window. "What did it look like on that date?" is a replay, and a replay is a
+question only the write side's event store can answer: the journal is append-only,
+so asking for any date is a replay rather than a second table someone has to keep
+in step.
 """
 
 from __future__ import annotations
@@ -29,9 +33,20 @@ from plantkeeper.domain.identifiers import PlantId
 router = APIRouter(prefix="/api/v1/journal", tags=["journal"])
 
 
-@router.get("/{plant_id}", response_model=JournalCollectionResponse, summary="A plant's journal")
+@router.get(
+    "/{plant_id}",
+    response_model=JournalCollectionResponse,
+    summary="A plant's journal",
+    description=(
+        "Answered from the `journal_entries` read model the Journal projection "
+        "maintains. The projections are asynchronous, so an entry added moments "
+        "ago may not be listed yet: the answer reflects projected state and may "
+        "lag the write side. `GET /api/v1/journal/{plant_id}/at` is a replay and "
+        "stays on the write store, so it never lags."
+    ),
+)
 async def get_journal(plant_id: UUID, mediator: Mediator) -> JournalCollectionResponse:
-    """Return the plant's entries in chronological order.
+    """Return the plant's entries in chronological order, from the read model.
 
     Returns 404 when the plant does not exist: an unknown plant and a plant with an
     empty journal are different answers.

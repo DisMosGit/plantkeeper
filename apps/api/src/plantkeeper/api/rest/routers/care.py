@@ -22,12 +22,22 @@ from plantkeeper.domain.identifiers import HouseholdId, PlantId
 router = APIRouter(prefix="/api/v1/care", tags=["care"])
 
 
-@router.get("/today", response_model=CareScheduleCollectionResponse, summary="What is due today")
+@router.get(
+    "/today",
+    response_model=CareScheduleCollectionResponse,
+    summary="What is due today",
+    description=(
+        "Answered from the read model the Care projection maintains. The "
+        "projections are asynchronous, so watering a plant moments ago may not "
+        "yet have moved its schedule out of today's list: the answer reflects "
+        "projected state and may lag the write side."
+    ),
+)
 async def get_today_care(
     mediator: Mediator,
     household_id: Annotated[UUID, Query(description="The household whose schedule to read.")],
 ) -> CareScheduleCollectionResponse:
-    """Return the household's schedules that come due before midnight UTC."""
+    """Return the schedules due before midnight UTC, from the read model."""
     query = GetTodayCareQuery(household_id=HouseholdId(household_id))
     view = view_of(await mediator.send(query), CollectionView[CareScheduleView])
     return CareScheduleCollectionResponse.from_view(view)
