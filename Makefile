@@ -9,13 +9,13 @@ SHELL := /bin/bash
 
 COMPOSE := docker compose
 
-.PHONY: help dev up down clean lint format test test-unit test-domain test-integration test-e2e coverage migrate api proto grpc admin admin-static workers iot iot-drought iot-dry-run contracts diagrams
+.PHONY: help dev up down clean lint format test test-unit test-domain test-integration test-e2e coverage migrate api proto grpc admin admin-static workers iot iot-drought iot-dry-run contracts diagrams dlq
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
-dev: ## Start local infra (Kafka, Postgres, Valkey, Console) and wait until healthy
+dev: ## Start local infra (Kafka, both Postgres instances, Valkey, Console) and wait until healthy
 	$(COMPOSE) up -d --wait --wait-timeout 300
 
 up: ## Start local infra in the background
@@ -60,7 +60,7 @@ coverage: proto ## Full run, then the per-layer floors (domain 90, application 8
 	uv run coverage report --include="*/plantkeeper/infrastructure/*"
 	@echo "HTML report: docs/coverage.html"
 
-migrate: ## Apply all migrations (Alembic write schema + Django read schema)
+migrate: ## Apply all migrations (Alembic write schema on the write instance + Django read schema on the read instance)
 	uv run alembic upgrade head
 	uv run python apps/admin/manage.py migrate
 
@@ -96,3 +96,6 @@ iot-drought: ## Run the IoT simulator with --scenario drought --seed 42 (trips A
 
 iot-dry-run: ## Print the simulated stream to stdout (--dry-run), without touching Kafka
 	uv run python -m plantkeeper.iot_simulator --dry-run --scenario normal --seed 42
+
+dlq: ## List what is waiting on plantkeeper.dlq.v1 (replay: uv run python tools/dlq.py replay --help)
+	uv run python tools/dlq.py list

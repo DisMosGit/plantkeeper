@@ -1,9 +1,14 @@
 # PlantKeeper — local infrastructure.
 #
-# Kafka runs in KRaft mode (no Zookeeper), Postgres holds the write schemas and the
-# read/projection schema, Valkey serves the cache and pub/sub, Redpanda Console is the
-# Kafka UI. Bring everything up with `make dev`, tear it down (with volumes) with
-# `make clean`.
+# Kafka runs in KRaft mode (no Zookeeper), two Postgres instances hold the write schemas
+# and the read side's schemas (one database per side: the read path stops competing with
+# writes, and a projection rebuild can never touch a write table), Valkey serves the cache
+# and pub/sub, Redpanda Console is the Kafka UI. Bring everything up with `make dev`, tear
+# it down (with volumes) with `make clean`.
+#
+# The split is configuration, not code: pointing `READ_POSTGRES_*` at the write instance
+# collapses it back into one database. That rollback, and the rest of the topology, is
+# documented in `docs/runbooks/local-topology.md`.
 #
 # Connection settings can be overridden through a local `.env` file (see `.env.example`).
 
@@ -54,7 +59,7 @@ services:
       start_period: 30s
     restart: unless-stopped
 
-  # --- Postgres (write schemas + read_analytics) ------------------------------
+  # --- Postgres (write schemas) -----------------------------------------------
   # Postgres 18 keeps its data in /var/lib/postgresql/18/docker and declares the
   # volume at /var/lib/postgresql, so the named volume is mounted there.
   postgres:
@@ -74,6 +79,35 @@ services:
         [
           "CMD-SHELL",
           "pg_isready -U ${POSTGRES_USER:-plantkeeper} -d ${POSTGRES_DB:-plantkeeper}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  # --- Postgres (the read side's own instance: read_analytics) ----------------
+  # A second instance rather than a second schema, so a projection rebuild and the
+  # admin's queries cannot compete with — or accidentally touch — the write tables.
+  # Same image, same credentials, a different port: the only thing that distinguishes
+  # the two URLs, which is what makes pointing both at one instance a one-line change.
+  postgres-read:
+    image: postgres:18-alpine
+    container_name: plantkeeper-postgres-read
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: ${READ_POSTGRES_USER:-plantkeeper}
+      POSTGRES_PASSWORD: ${READ_POSTGRES_PASSWORD:-plantkeeper}
+      POSTGRES_DB: ${READ_POSTGRES_DB:-plantkeeper}
+    volumes:
+      - postgres-read-data:/var/lib/postgresql
+      - ./docker/postgres-read/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${READ_POSTGRES_USER:-plantkeeper} -d ${READ_POSTGRES_DB:-plantkeeper}",
         ]
       interval: 10s
       timeout: 5s
@@ -118,3 +152,4 @@ services:
 volumes:
   kafka-data:
   postgres-data:
+  postgres-read-data:
