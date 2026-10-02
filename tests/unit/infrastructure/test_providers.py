@@ -8,6 +8,7 @@ or the other way round.
 
 from __future__ import annotations
 
+from cqrs.saga.storage.protocol import ISagaStorage
 from dishka import Provider, Scope, make_async_container, provide
 
 from plantkeeper.application.commands.garden import AddPlantHandler
@@ -27,6 +28,8 @@ from plantkeeper.infrastructure.di.providers import (
     api_providers,
     worker_providers,
 )
+from plantkeeper.infrastructure.persistence.saga_storage import SqlAlchemySagaStorage
+from plantkeeper.workers.main import build_unbound_saga_storage
 
 
 def test_every_bound_request_is_a_registered_handler() -> None:
@@ -143,5 +146,46 @@ async def test_a_test_provider_can_replace_the_worker_upstream() -> None:
             source = await request_container.get(SpeciesSource)
 
         assert isinstance(source, StubSpeciesSource)
+    finally:
+        await container.close()
+
+
+async def test_the_worker_container_builds_the_storage_its_jobs_run_on() -> None:
+    """A job with no request runs on an unbound storage, built where the jobs are.
+
+    The entry point asks for this before it subscribes to anything, and it is the
+    only caller that asks outside a request. When the request-bound binding was added
+    for the consumers, the process-scoped one became unreachable — Dishka keys a
+    factory by its return type, so the second registration replaces the first — and
+    the worker stopped starting at all. Resolving it here fails loudly instead.
+    """
+    container = make_async_container(*worker_providers())
+    try:
+        storage = await build_unbound_saga_storage(container)
+
+        assert isinstance(storage, SqlAlchemySagaStorage)
+        assert storage.is_bound is False
+    finally:
+        await container.close()
+
+
+async def test_a_consumer_still_gets_the_request_bound_storage() -> None:
+    """The other half: the unbound storage must not answer inside a request.
+
+    A saga step's checkpoint commits with the delivery's own unit of work, so the
+    request scope has to resolve the *bound* storage. A process-scoped provider
+    registered last would make this scope answer unbound — silently, since both
+    resolve to the same class — and the checkpoint would stop sharing the transaction
+    it belongs to.
+    """
+    container = make_async_container(*worker_providers())
+    try:
+        async with container() as request_container:
+            storage = await request_container.get(ISagaStorage)
+            again = await request_container.get(ISagaStorage)
+
+        assert isinstance(storage, SqlAlchemySagaStorage)
+        assert storage.is_bound is True
+        assert again is storage
     finally:
         await container.close()

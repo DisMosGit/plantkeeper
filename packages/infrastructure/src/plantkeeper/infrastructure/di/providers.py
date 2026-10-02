@@ -724,22 +724,20 @@ repositories to do its work.
 class SagaProvider(Provider):
     """The write-side consumers' dependencies.
 
-    The division follows the lifetimes: the unbound saga storage and the saga map
-    live for the process; the sagas, their steps, the consumers, the *request-bound*
-    saga storage and the adapters that read through the request's session live for
-    one delivery. The upstream catalogue source is not here — it belongs to
-    :class:`ExternalProvider`.
+    The division follows the lifetimes: the saga map lives for the process; the sagas,
+    their steps, the consumers, the *request-bound* saga storage and the adapters that
+    read through the request's session live for one delivery. The upstream catalogue
+    source is not here — it belongs to :class:`ExternalProvider`.
+
+    ``ISagaStorage`` is therefore bound **once**, at ``REQUEST`` scope. A process-scoped
+    binding cannot sit beside it: a container holds one factory per type, so the second
+    registration replaces the first instead of being chosen by scope. Registered last,
+    a process-scoped one leaves the lookup a request makes without a factory at all;
+    registered first, it makes the request scope answer with the *unbound* storage and
+    a saga step's checkpoint stops sharing the delivery's transaction. The one caller
+    with no request — the worker's entry point — builds the unbound storage itself
+    (``plantkeeper.workers.main``).
     """
-
-    @provide(scope=Scope.APP)
-    def saga_storage(self, session_factory: async_sessionmaker[AsyncSession]) -> ISagaStorage:
-        """Own the ``write_shared`` saga tables, for callers with no request.
-
-        This is the *unbound* binding: each run opens a session of its own. It is
-        what ``SagaRecoveryJob`` gets, because a background tick has no request
-        scope and therefore no unit of work to commit into.
-        """
-        return SqlAlchemySagaStorage(session_factory)
 
     @provide(scope=Scope.REQUEST)
     def request_saga_storage(
@@ -755,9 +753,8 @@ class SagaProvider(Provider):
         checkpoint and its lifecycle outbox row become durable together or not at
         all, which is the crash window this closes (``docs/sagas.md``).
 
-        It overrides the app-scoped provider for anything resolved inside a request
-        scope, so a consumer's saga gets the bound one and the recovery job — which
-        resolves from the app scope directly — keeps the unbound one.
+        It is the only binding of ``ISagaStorage`` the container holds, so a consumer's
+        saga gets the bound one without anything in a request having to ask for it.
 
         The committer is the unit of work rather than the raw session, so a
         checkpoint commit drains the aggregates' events into the outbox on its way,

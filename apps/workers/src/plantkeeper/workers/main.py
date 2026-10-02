@@ -31,10 +31,12 @@ import signal
 from cqrs.saga.storage.protocol import ISagaStorage
 from dishka import AsyncContainer, make_async_container
 from faststream.kafka import KafkaBroker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from plantkeeper.infrastructure.config import Settings
 from plantkeeper.infrastructure.di.providers import worker_providers
 from plantkeeper.infrastructure.messaging.relay import OutboxRelay
+from plantkeeper.infrastructure.persistence.saga_storage import SqlAlchemySagaStorage
 from plantkeeper.infrastructure.scheduling.command_dispatch import CommandDispatcher
 from plantkeeper.infrastructure.scheduling.job import BackgroundJob
 from plantkeeper.infrastructure.scheduling.missed_care import MissedCareScheduler
@@ -96,12 +98,28 @@ def build_background_jobs(
     ]
 
 
+async def build_unbound_saga_storage(container: AsyncContainer) -> ISagaStorage:
+    """Build the saga storage a job with no request scope runs on.
+
+    Built here rather than resolved from the container because the container binds
+    ``ISagaStorage`` to the delivery's own transaction, which is what makes a
+    consumer's step and its checkpoint one commit
+    (``plantkeeper.infrastructure.di.providers.SagaProvider``). A container holds one
+    factory per type, so a process-scoped binding of the same type cannot be resolved
+    beside it — and a job that runs outside a request has no transaction to bind to
+    anyway. This is the same reason :func:`build_background_jobs` builds its jobs here
+    instead of asking Dishka for them.
+    """
+    session_factory = await container.get(async_sessionmaker[AsyncSession])
+    return SqlAlchemySagaStorage(session_factory)
+
+
 async def run(container: AsyncContainer) -> None:
     """Start the broker and the jobs, run until stopped, then stop both."""
     broker = await container.get(KafkaBroker)
     relay = await container.get(OutboxRelay)
     settings = await container.get(Settings)
-    storage = await container.get(ISagaStorage)
+    storage = await build_unbound_saga_storage(container)
     jobs = build_background_jobs(container=container, settings=settings, storage=storage)
 
     # Routes must exist before the broker starts: FastStream refuses to add them
