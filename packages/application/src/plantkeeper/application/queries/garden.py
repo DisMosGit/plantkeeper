@@ -1,8 +1,16 @@
-"""Garden queries."""
+"""Garden queries.
+
+Two kinds of question live here, and CQRS answers them from two places. Reading
+one plant is the answer to a command the caller just ran — or a read a command
+needs — so it stays on the write store. Listing a household's plants is a question
+about what the system looks like, so it is answered from the read model
+(``docs/cqrs.md``).
+"""
 
 from __future__ import annotations
 
 from plantkeeper.application.errors import NotFoundError
+from plantkeeper.application.ports.read_models import PlantListRow, ReadModelReader
 from plantkeeper.application.ports.repositories import HouseholdRepository, PlantRepository
 from plantkeeper.application.queries.base import Query, QueryHandler
 from plantkeeper.application.views import CollectionView, HouseholdView, PlantView
@@ -16,7 +24,12 @@ class GetPlantQuery(Query):
 
 
 class GetPlantQueryHandler(QueryHandler[GetPlantQuery, PlantView]):
-    """Answer with the plant, or fail."""
+    """Answer with the plant, or fail.
+
+    The write store, not the read model: this is what ``POST /plants`` answers its
+    caller with, and a plant that was just created must not read as missing while
+    the projection catches up.
+    """
 
     def __init__(self, plants: PlantRepository) -> None:
         self._plants = plants
@@ -37,17 +50,36 @@ class ListPlantsQuery(Query):
 
 
 class ListPlantsQueryHandler(QueryHandler[ListPlantsQuery, CollectionView[PlantView]]):
-    """Answer with the household's plants, oldest first."""
+    """Answer with the household's plants, oldest first, from the read model.
 
-    def __init__(self, plants: PlantRepository) -> None:
-        self._plants = plants
+    The answer reflects projected state: a plant created moments ago may not be
+    listed until ``GardenProjection`` has seen its ``PlantAdded``. That window is
+    the price of the split, and it is documented in ``docs/cqrs.md``.
+    """
+
+    def __init__(self, read_models: ReadModelReader) -> None:
+        self._read_models = read_models
 
     async def handle(self, query: ListPlantsQuery) -> CollectionView[PlantView]:
-        """Return every plant of the household, unless removed ones are asked for."""
-        plants = await self._plants.list_by_household(
+        """Return every projected plant of the household."""
+        rows = await self._read_models.list_plants(
             query.household_id, include_removed=query.include_removed
         )
-        return CollectionView[PlantView](items=[PlantView.from_domain(p) for p in plants])
+        return CollectionView[PlantView](items=[_plant_view(row) for row in rows])
+
+
+def _plant_view(row: PlantListRow) -> PlantView:
+    """Turn a read-model row into the view the API answers with."""
+    return PlantView(
+        plant_id=row.plant_id,
+        household_id=row.household_id,
+        species_id=row.species_id,
+        name=row.name,
+        location=row.location,
+        added_at=row.added_at,
+        last_watered_at=row.last_watered_at,
+        removed=row.removed,
+    )
 
 
 class GetHouseholdQuery(Query):
@@ -57,7 +89,12 @@ class GetHouseholdQuery(Query):
 
 
 class GetHouseholdQueryHandler(QueryHandler[GetHouseholdQuery, HouseholdView]):
-    """Answer with the household and how many plants it owns."""
+    """Answer with the household and how many plants it owns.
+
+    The write store: the household is what ``POST /households`` answers with, and
+    what ``POST /plants`` reads to enforce its cap, so both the command's answer
+    and the read a command needs come from the side that owns the write.
+    """
 
     def __init__(self, households: HouseholdRepository) -> None:
         self._households = households

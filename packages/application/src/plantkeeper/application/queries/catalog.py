@@ -1,9 +1,18 @@
-"""Catalog queries."""
+"""Catalog queries.
+
+The catalogue has two read paths and they answer different questions. The list is
+a question about what the system looks like, so it is answered from the read model
+the ``SpeciesProjection`` maintains. Reading one species is what a client asks
+right after naming it — and it is cache-aside through Valkey — so it stays on the
+write store, where a catalogue entry that was just synchronised is visible before
+the projection catches up.
+"""
 
 from __future__ import annotations
 
 from plantkeeper.application.errors import NotFoundError
 from plantkeeper.application.ports.catalog import SpeciesCache
+from plantkeeper.application.ports.read_models import ReadModelReader, SpeciesListRow
 from plantkeeper.application.ports.repositories import SpeciesRepository
 from plantkeeper.application.queries.base import Query, QueryHandler
 from plantkeeper.application.views import CollectionView, SpeciesView
@@ -15,15 +24,31 @@ class ListSpeciesQuery(Query):
 
 
 class ListSpeciesQueryHandler(QueryHandler[ListSpeciesQuery, CollectionView[SpeciesView]]):
-    """Answer with every species, by scientific name."""
+    """Answer with every species, by scientific name, from the read model.
 
-    def __init__(self, species: SpeciesRepository) -> None:
-        self._species = species
+    A species the synchronisation added moments ago may not be listed until the
+    ``SpeciesProjection`` has seen its event (``docs/cqrs.md``).
+    """
+
+    def __init__(self, read_models: ReadModelReader) -> None:
+        self._read_models = read_models
 
     async def handle(self, query: ListSpeciesQuery) -> CollectionView[SpeciesView]:
-        """Return the catalogue."""
-        species = await self._species.list_all()
-        return CollectionView[SpeciesView](items=[SpeciesView.from_domain(s) for s in species])
+        """Return the projected catalogue."""
+        rows = await self._read_models.list_species()
+        return CollectionView[SpeciesView](items=[_species_view(row) for row in rows])
+
+
+def _species_view(row: SpeciesListRow) -> SpeciesView:
+    """Turn a read-model row into the view the API answers with."""
+    return SpeciesView(
+        species_id=row.species_id,
+        scientific_name=row.scientific_name,
+        common_name=row.common_name,
+        watering_interval=row.watering_interval,
+        light_requirement=row.light_requirement,
+        version=row.version,
+    )
 
 
 class GetSpeciesQuery(Query):
