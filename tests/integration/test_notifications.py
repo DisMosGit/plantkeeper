@@ -14,7 +14,7 @@ of the same afternoon.
 from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from cqrs.dispatcher.saga import SagaDispatcher
@@ -29,6 +29,7 @@ from plantkeeper.application.ports.notifications import (
     NotificationChannelError,
     NotificationSubscription,
 )
+from plantkeeper.application.ports.plant_references import PlantReference
 from plantkeeper.domain.base import DomainEvent
 from plantkeeper.domain.care.events import CareMissed, WateringDue, WateringRescheduled
 from plantkeeper.domain.garden.household import Household
@@ -36,10 +37,16 @@ from plantkeeper.domain.garden.plant import Plant
 from plantkeeper.domain.identifiers import HouseholdId, NotificationId, PlantId, SensorId, SpeciesId
 from plantkeeper.domain.notifications.events import NotificationCreated
 from plantkeeper.domain.notifications.values import NotificationType
-from plantkeeper.domain.telemetry.events import SoilMoistureLow, TemperatureAnomaly
+from plantkeeper.domain.telemetry.events import SensorOffline, SoilMoistureLow, TemperatureAnomaly
 from plantkeeper.domain.values import Location, Moisture, Temperature
 from plantkeeper.infrastructure.persistence.models.notifications import NotificationModel
+from plantkeeper.infrastructure.persistence.models.plant_refs import (
+    NotificationPlantReferenceModel,
+)
 from plantkeeper.infrastructure.persistence.models.shared import OutboxModel
+from plantkeeper.infrastructure.persistence.repositories.plant_references import (
+    SqlAlchemyPlantReferenceRepository,
+)
 from plantkeeper.infrastructure.persistence.saga_storage import SqlAlchemySagaStorage
 from plantkeeper.infrastructure.persistence.uow import SqlAlchemyUnitOfWork
 
@@ -104,7 +111,15 @@ class FailingChannel:
 async def seed_plant(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> tuple[HouseholdId, PlantId]:
-    """Insert a household with one plant and return their identifiers."""
+    """Insert a household with one plant and return their identifiers.
+
+    The plant is also written into this context's own reference table, because
+    that is where the consumer resolves it from: the Garden tables are not this
+    context's to read. In production the reference arrives as ``PlantAdded``;
+    here it is seeded directly so a test about a *care* event does not have to
+    consume a garden one first. ``tests/integration/test_plant_references.py``
+    covers the event-maintained path.
+    """
     async with session_factory() as session:
         uow = SqlAlchemyUnitOfWork(session)
         async with uow:
@@ -119,6 +134,17 @@ async def seed_plant(
             )
             household.add_plant(plant.id)
             await uow.plants.add(plant)
+            await SqlAlchemyPlantReferenceRepository(
+                session, NotificationPlantReferenceModel
+            ).upsert(
+                PlantReference(
+                    plant_id=plant.id,
+                    household_id=household.id,
+                    name=plant.name,
+                    location=plant.location.value,
+                    seen_at=NOW,
+                )
+            )
             await uow.commit()
             return household.id, plant.id
 
@@ -132,7 +158,11 @@ async def consume(
     """Run one delivery through ``NotificationConsumer`` as the worker does."""
     storage = SqlAlchemySagaStorage(session_factory)
     async with session_factory() as session:
-        consumer = NotificationConsumer(SqlAlchemyUnitOfWork(session), FakeClock())
+        consumer = NotificationConsumer(
+            SqlAlchemyUnitOfWork(session),
+            FakeClock(),
+            SqlAlchemyPlantReferenceRepository(session, NotificationPlantReferenceModel),
+        )
         return await consumer.consume(event, consumer_group=group, dispatcher=a_dispatcher(storage))
 
 
@@ -188,6 +218,18 @@ def an_anomalous_temperature(plant_id: PlantId, *, temperature: float = 41.0) ->
         low_threshold=10.0,
         high_threshold=35.0,
         occurred_at=NOW,
+    )
+
+
+def a_silence(
+    plant_id: PlantId, *, offline_for: timedelta = timedelta(minutes=20)
+) -> SensorOffline:
+    return SensorOffline(
+        sensor_id=SensorId.new(),
+        plant_id=plant_id,
+        last_seen_at=NOW,
+        offline_for=offline_for,
+        occurred_at=NOW + offline_for,
     )
 
 
@@ -356,3 +398,38 @@ async def test_a_nudge_for_an_unknown_event_is_ignored(
         )
 
     assert channel.published == []
+
+
+async def test_a_silent_sensor_becomes_an_offline_notification(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """The catalogue's offline event now has a producer, and this is its reminder."""
+    household_id, plant_id = await seed_plant(session_factory)
+
+    assert await consume(session_factory, a_silence(plant_id))
+
+    [notification] = await stored_notifications(session_factory)
+    assert notification.notification_type == NotificationType.SENSOR_OFFLINE.value
+    assert notification.household_id == household_id.value
+    assert notification.payload == {
+        "plant_id": str(plant_id),
+        "last_seen_at": NOW.isoformat(),
+        "offline_for_seconds": 1200.0,
+    }
+
+
+async def test_each_silence_becomes_its_own_notification(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """No unread guard here: the producer already announces one event per silence.
+
+    ``SoilMoistureLow`` is guarded because it fires on every reading; a silence fires
+    once, so a second one means the sensor reported and went quiet again — a new fact
+    the household should see even if it never read the first.
+    """
+    _, plant_id = await seed_plant(session_factory)
+
+    assert await consume(session_factory, a_silence(plant_id))
+    assert await consume(session_factory, a_silence(plant_id))
+
+    assert len(await stored_notifications(session_factory)) == 2

@@ -5,10 +5,11 @@ context: the transactional outbox and the HTTP idempotency keys. The names match
 ``docker/postgres/init/01-schemas.sql``; Alembic creates them too, so a database
 whose volume already existed is migrated just as well as a fresh one.
 
-The read side adds one schema of its own, ``read_analytics``, owned by Django and
-created by ``apps/admin``'s migration. It is named here so the read models and
-the schema-creating migration cannot drift from the schema the infrastructure
-already provisions.
+The read side adds schemas of its own, owned by Django and created by
+``apps/admin``'s migrations: ``read_analytics`` for the domain read models and
+``read_telemetry`` for the telemetry rollups. They are named here so the read
+models and the schema-creating migrations cannot drift from the schema the
+infrastructure already provisions.
 """
 
 from __future__ import annotations
@@ -36,6 +37,15 @@ ALL_WRITE_SCHEMAS: Final = (
 )
 
 READ_ANALYTICS: Final = "read_analytics"
-"""Where the projections write and Django Admin reads; Django owns its migrations."""
+"""Where the domain projections write and Django Admin reads; Django owns its migrations."""
 
-ALL_READ_SCHEMAS: Final = (READ_ANALYTICS,)
+READ_TELEMETRY: Final = "read_telemetry"
+"""Where the telemetry rollup projection writes; Django owns its migrations.
+
+A schema of its own rather than a corner of ``read_analytics``: the rollups are the
+platform's only high-volume read model, they are rebuilt on a schedule of their own
+from ``telemetry.events``, and keeping them apart leaves the domain read models'
+shape, one-writer rule and rebuild story untouched.
+"""
+
+ALL_READ_SCHEMAS: Final = (READ_ANALYTICS, READ_TELEMETRY)

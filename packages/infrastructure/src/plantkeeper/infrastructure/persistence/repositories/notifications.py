@@ -53,8 +53,14 @@ class SqlAlchemyNotificationRepository:
         if model is not None:
             await self._session.delete(model)
 
-    async def list_pending(self, household_id: HouseholdId) -> list[Notification]:
-        """List the household's unacknowledged notifications, oldest first."""
+    async def list_pending(
+        self, household_id: HouseholdId, *, since: NotificationId | None = None
+    ) -> list[Notification]:
+        """List the household's unacknowledged notifications, oldest first.
+
+        ``since`` is a cursor: only notifications with a greater identifier are
+        returned, which is what lets an open stream resume where it stopped.
+        """
         statement = (
             select(NotificationModel)
             .where(
@@ -63,5 +69,7 @@ class SqlAlchemyNotificationRepository:
             )
             .order_by(NotificationModel.created_at, NotificationModel.id)
         )
+        if since is not None:
+            statement = statement.where(NotificationModel.id > since.value)
         models = (await self._session.execute(statement)).scalars()
         return [notification_to_domain(model) for model in models]
