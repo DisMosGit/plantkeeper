@@ -38,6 +38,8 @@ from plantkeeper.domain.saga.events import (
     SagaCompensated,
     SagaCompleted,
     SagaFailed,
+    SagaParked,
+    SagaRetrying,
     SagaStarted,
 )
 from plantkeeper.domain.telemetry.events import (
@@ -76,14 +78,16 @@ EVENT_TYPES: list[type[DomainEvent]] = [
     SagaCompleted,
     SagaFailed,
     SagaCompensated,
+    SagaRetrying,
+    SagaParked,
 ]
 
 EXPECTED_EVENT_NAMES = {event_type.__name__ for event_type in EVENT_TYPES}
 
 
 def test_the_catalogue_has_the_documented_size() -> None:
-    assert len(EVENT_TYPES) == 26
-    assert len(EXPECTED_EVENT_NAMES) == 26
+    assert len(EVENT_TYPES) == 28
+    assert len(EXPECTED_EVENT_NAMES) == 28
 
 
 @pytest.mark.parametrize("event_type", EVENT_TYPES, ids=lambda event_type: event_type.__name__)

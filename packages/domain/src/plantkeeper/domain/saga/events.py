@@ -42,3 +42,32 @@ class SagaCompensated(DomainEvent):
 
     saga_id: UUID
     saga_name: str
+
+
+class SagaRetrying(DomainEvent):
+    """A recorded failure is being retried under the process's retry budget.
+
+    Distinct from ``SagaStarted``: the process has run before and has a step
+    history, so a reader of the stream can tell a first attempt from a retry
+    without comparing the recorded state.
+    """
+
+    saga_id: UUID
+    saga_name: str
+    attempt: int
+    error: str
+
+
+class SagaParked(DomainEvent):
+    """A process ran out of retries and is waiting for an operator.
+
+    Terminal until someone resets it. Published because the alternative — a
+    process that quietly stopped being retried — is indistinguishable from one
+    that is still trying, and "is anything stuck?" should be answerable from the
+    event stream.
+    """
+
+    saga_id: UUID
+    saga_name: str
+    attempts: int
+    error: str

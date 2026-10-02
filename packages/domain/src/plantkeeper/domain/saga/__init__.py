@@ -6,6 +6,8 @@ from plantkeeper.domain.saga.events import (
     SagaCompensated,
     SagaCompleted,
     SagaFailed,
+    SagaParked,
+    SagaRetrying,
     SagaStarted,
 )
 
@@ -13,5 +15,7 @@ __all__ = [
     "SagaCompensated",
     "SagaCompleted",
     "SagaFailed",
+    "SagaParked",
+    "SagaRetrying",
     "SagaStarted",
 ]
