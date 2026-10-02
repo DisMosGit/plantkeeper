@@ -7,6 +7,7 @@ of the suite uses, and the client is the stub ``make proto`` generated — the p
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -91,9 +92,12 @@ async def seed_plant_with_schedule(database: str) -> tuple[str, str]:
 
 
 async def test_get_today_care_returns_a_due_schedule(
-    database: str, grpc_channel: grpc.aio.Channel
+    database: str, grpc_channel: grpc.aio.Channel, project_outbox: Callable[[], Awaitable[int]]
 ) -> None:
     household_id, plant_id = await seed_plant_with_schedule(database)
+    # "What is due today" is a report, answered from the read model: the seed's
+    # events have to be projected before the RPC can see them.
+    await project_outbox()
     response = await care_stub(grpc_channel).GetTodayCare(
         care_pb2.GetTodayCareRequest(household_id=common_pb2.HouseholdId(value=household_id)),
         timeout=RPC_TIMEOUT,
@@ -135,9 +139,10 @@ async def test_a_malformed_identifier_is_invalid_argument(grpc_channel: grpc.aio
 
 
 async def test_list_plants_returns_the_household(
-    database: str, grpc_channel: grpc.aio.Channel
+    database: str, grpc_channel: grpc.aio.Channel, project_outbox: Callable[[], Awaitable[int]]
 ) -> None:
     household_id, plant_id = await seed_plant_with_schedule(database)
+    await project_outbox()
     response = await garden_stub(grpc_channel).ListPlants(
         garden_pb2.ListPlantsRequest(household_id=common_pb2.HouseholdId(value=household_id)),
         timeout=RPC_TIMEOUT,

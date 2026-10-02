@@ -181,7 +181,10 @@ async def watering_completed_at(database: str) -> datetime:
 
 
 async def a_watered_plant(
-    api_client: AsyncClient, database: str, settings: Settings
+    api_client: AsyncClient,
+    database: str,
+    settings: Settings,
+    project_outbox: Callable[[], Awaitable[int]],
 ) -> tuple[str, datetime]:
     """Onboard one plant and water it, returning its id and the care moment."""
     species = await seed_species(database)
@@ -199,6 +202,11 @@ async def a_watered_plant(
         await publish_the_outbox(settings)
 
         async def journalled() -> list[dict[str, object]] | None:
+            # The timeline is a read-model answer, and this test runs the
+            # write-side consumers, not the read side's. Projecting the outbox
+            # each round puts the entry the worker produced into the read model
+            # the endpoint reads, without a broker in between.
+            await project_outbox()
             response = await api_client.get(f"/api/v1/journal/{plant_id}")
             assert response.status_code == 200, response.text
             items: list[dict[str, object]] = response.json()["items"]
@@ -213,8 +221,11 @@ async def test_a_watering_through_http_lands_in_the_event_sourced_journal(
     api_client: AsyncClient,
     database: str,
     worker_settings: Settings,
+    project_outbox: Callable[[], Awaitable[int]],
 ) -> None:
-    plant_id, care_moment = await a_watered_plant(api_client, database, worker_settings)
+    plant_id, care_moment = await a_watered_plant(
+        api_client, database, worker_settings, project_outbox
+    )
 
     response = await api_client.get(f"/api/v1/journal/{plant_id}")
     assert response.status_code == 200, response.text
@@ -232,8 +243,11 @@ async def test_the_journal_can_be_replayed_to_a_past_date(
     api_client: AsyncClient,
     database: str,
     worker_settings: Settings,
+    project_outbox: Callable[[], Awaitable[int]],
 ) -> None:
-    plant_id, care_moment = await a_watered_plant(api_client, database, worker_settings)
+    plant_id, care_moment = await a_watered_plant(
+        api_client, database, worker_settings, project_outbox
+    )
     cared_on = care_moment.date()
 
     before = await api_client.get(

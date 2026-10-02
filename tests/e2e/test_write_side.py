@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -40,16 +40,11 @@ from plantkeeper.infrastructure.messaging.relay import OutboxRelay
 from plantkeeper.infrastructure.messaging.topics import GARDEN_EVENTS
 from plantkeeper.infrastructure.persistence.models.garden import PlantModel
 from plantkeeper.infrastructure.persistence.models.shared import OutboxModel
-from plantkeeper.infrastructure.persistence.repositories.care import (
-    SqlAlchemyCareScheduleRepository,
-)
-from plantkeeper.infrastructure.persistence.repositories.catalog import (
-    SqlAlchemySpeciesRepository,
-)
 from plantkeeper.infrastructure.persistence.repositories.notifications import (
     SqlAlchemyNotificationRepository,
 )
 from plantkeeper.infrastructure.persistence.tracking import AggregateTracker
+from plantkeeper.infrastructure.persistence.uow import SqlAlchemyUnitOfWork
 
 pytestmark = pytest.mark.slow
 
@@ -71,6 +66,7 @@ EXPECTED_API_SURFACE: dict[str, set[str]] = {
     "/api/v1/journal/{plant_id}": {"get"},
     "/api/v1/journal/{plant_id}/at": {"get"},
     "/api/v1/notifications/pending": {"get"},
+    "/api/v1/notifications/stream": {"get"},
     "/api/v1/notifications/{notification_id}/ack": {"post"},
 }
 """Every operation the write API exposes, as a contract rather than a sample."""
@@ -200,33 +196,57 @@ async def session_on(database: str) -> AsyncIterator[AsyncSession]:
 
 
 async def seed_care_schedule(database: str, plant_id: str) -> datetime:
-    """Write a care schedule directly and return when its first watering is due."""
+    """Write a care schedule through the unit of work and return when it is due.
+
+    The unit of work rather than a bare session: onboarding (Phase 4) creates the
+    schedule in production and its ``CareScheduleCreated`` reaches the read side
+    through the outbox, so a seed that skipped the outbox could never be projected
+    — and the "what needs watering today" list is answered from the read model.
+    """
     now = datetime.now(UTC)
     starts_at = now + timedelta(days=7)
-    async with session_on(database) as session:
-        await SqlAlchemyCareScheduleRepository(session, AggregateTracker()).add(
-            CareSchedule.create(
-                plant_id=PlantId(uuid.UUID(plant_id)),
-                watering_interval=WateringInterval(value=timedelta(days=7)),
-                starts_at=starts_at,
-                now=now,
-            )
-        )
-        await session.commit()
+    engine = create_async_engine(database)
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            uow = SqlAlchemyUnitOfWork(session)
+            async with uow:
+                await uow.care_schedules.add(
+                    CareSchedule.create(
+                        plant_id=PlantId(uuid.UUID(plant_id)),
+                        watering_interval=WateringInterval(value=timedelta(days=7)),
+                        starts_at=starts_at,
+                        now=now,
+                    )
+                )
+                await uow.commit()
+    finally:
+        await engine.dispose()
     return starts_at
 
 
 async def seed_species(database: str) -> Species:
-    """Write one catalogue entry directly and return it."""
-    species = Species.create(
+    """Write one catalogue entry through the unit of work and return it.
+
+    ``Species.add`` records ``SpeciesAdded``, which is what the read side's
+    catalogue table is projected from — the list endpoint answers from the read
+    model, so a seed that recorded no event would leave the list empty.
+    """
+    species = Species.add(
         scientific_name="Nephrolepis exaltata",
         common_name="Boston fern",
         watering_interval=WateringInterval(value=timedelta(days=7)),
         light_requirement=LightRequirement.MEDIUM,
+        now=datetime.now(UTC),
     )
-    async with session_on(database) as session:
-        await SqlAlchemySpeciesRepository(session, AggregateTracker()).add(species)
-        await session.commit()
+    engine = create_async_engine(database)
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            uow = SqlAlchemyUnitOfWork(session)
+            async with uow:
+                await uow.species.add(species)
+                await uow.commit()
+    finally:
+        await engine.dispose()
     return species
 
 
@@ -340,7 +360,7 @@ async def test_an_empty_location_is_unprocessable(api_client: AsyncClient) -> No
 
 
 async def test_watering_twice_within_an_hour_is_refused(
-    api_client: AsyncClient, database: str
+    api_client: AsyncClient, database: str, project_outbox: Callable[[], Awaitable[int]]
 ) -> None:
     household_id = await create_household(api_client)
     created = await api_client.post(
@@ -356,6 +376,9 @@ async def test_watering_twice_within_an_hour_is_refused(
 
     # Onboarding is Phase 4's job, so the schedule is written directly here.
     await seed_care_schedule(database, plant_id)
+    # "Today" is answered from the read model, so the plant and its schedule have
+    # to be projected before the boundary below means anything.
+    await project_outbox()
 
     today = await api_client.get("/api/v1/care/today", params={"household_id": household_id})
     assert today.status_code == 200
@@ -454,10 +477,17 @@ async def test_a_catalogue_sync_request_is_accepted_and_published(
     assert [row.published_at is not None for row in await outbox_rows(database)] == [True]
 
 
-async def test_a_plant_can_be_read_back(api_client: AsyncClient) -> None:
+async def test_a_plant_can_be_read_back(
+    api_client: AsyncClient, project_outbox: Callable[[], Awaitable[int]]
+) -> None:
     household_id = await create_household(api_client)
     fern = await create_plant(api_client, household_id)
     monstera = await create_plant(api_client, household_id, name="Monstera", location="Window")
+
+    # The list is a read-model answer; the single-plant reads below are the
+    # command's own answer and stay on the write store, which is why only the
+    # list has to be projected first.
+    await project_outbox()
 
     listed = await api_client.get("/api/v1/plants", params={"household_id": household_id})
     assert listed.status_code == 200
@@ -474,6 +504,7 @@ async def test_a_plant_can_be_read_back(api_client: AsyncClient) -> None:
 
     removed = await api_client.delete(f"/api/v1/plants/{fern['plant_id']}")
     assert removed.status_code == 200
+    await project_outbox()
 
     still_listed = await api_client.get("/api/v1/plants", params={"household_id": household_id})
     assert [item["name"] for item in still_listed.json()["items"]] == ["Monstera"]
@@ -541,8 +572,13 @@ async def test_a_sensor_can_be_unregistered(api_client: AsyncClient) -> None:
     assert unknown.json()["error"] == "NotFoundError"
 
 
-async def test_the_catalogue_can_be_listed_and_read(api_client: AsyncClient, database: str) -> None:
+async def test_the_catalogue_can_be_listed_and_read(
+    api_client: AsyncClient, database: str, project_outbox: Callable[[], Awaitable[int]]
+) -> None:
     species = await seed_species(database)
+    # The list is projected from `SpeciesAdded`; reading one species is cache-aside
+    # on the write store and needs no projection.
+    await project_outbox()
 
     listed = await api_client.get("/api/v1/catalog/species")
     assert listed.status_code == 200

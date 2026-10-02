@@ -95,6 +95,25 @@ def postgres_dsn(postgres_container: PostgresContainer) -> str:
     return str(postgres_container.get_connection_url())
 
 
+@pytest.fixture(scope="session")
+def read_postgres_container(postgres_image: str) -> Iterator[PostgresContainer]:
+    """Session-scoped Postgres for the *read* side, started on demand.
+
+    A second container rather than the write one: the read side owns its own
+    database, and a test that pointed both sides at one instance would not
+    exercise the split at all. Only a test that asks for a read-side fixture pays
+    for it.
+    """
+    with PostgresContainer(postgres_image, driver="asyncpg") as container:
+        yield container
+
+
+@pytest.fixture(scope="session")
+def read_postgres_dsn(read_postgres_container: PostgresContainer) -> str:
+    """The SQLAlchemy URL of the read-side database."""
+    return str(read_postgres_container.get_connection_url())
+
+
 def _run_migrations(dsn: str) -> None:
     """Apply every migration to ``dsn``.
 
@@ -139,8 +158,12 @@ async def database(migrated_database: str) -> str:
 
 
 @pytest.fixture(scope="session")
-def django_ready(postgres_dsn: str) -> Iterator[None]:
-    """Point Django at the session's container and apply its migrations.
+def django_ready(read_postgres_dsn: str) -> Iterator[None]:
+    """Point Django at the read-side container and apply its migrations.
+
+    The read instance, not the write one: ``read_analytics`` lives on its own
+    database, and a schema applied to the write instance would be the very
+    coupling the split removes.
 
     ``django.setup()`` itself has already happened by the time this runs: pytest
     imports a test module before it runs any fixture, and importing a read model
@@ -153,7 +176,7 @@ def django_ready(postgres_dsn: str) -> Iterator[None]:
     from django.conf import settings
     from django.core.management import call_command
 
-    parsed = urlparse(postgres_dsn)
+    parsed = urlparse(read_postgres_dsn)
     assert parsed.username and parsed.password and parsed.hostname and parsed.port
     settings.DATABASES["default"].update(
         {
@@ -168,31 +191,58 @@ def django_ready(postgres_dsn: str) -> Iterator[None]:
     yield
 
 
-def truncate_read_models() -> None:
-    """Empty every ``read_analytics`` table in one statement.
+def read_side_tables() -> dict[str, set[str]]:
+    """Return the ``schema -> bare table names`` of every read-side model.
 
-    Built from Django's app registry rather than a list, so a model added to the
-    read side cannot quietly survive between tests.
+    Derived from Django's app registry and each model's declared schema rather
+    than from a list of apps, so a model added to the read side cannot quietly
+    survive between tests (and cannot be forgotten by a migration test).
     """
     from django.apps import apps
+
+    from plantkeeper.infrastructure.persistence.schemas import ALL_READ_SCHEMAS
+
+    tables: dict[str, set[str]] = {schema: set() for schema in ALL_READ_SCHEMAS}
+    for model in apps.get_models():
+        table = model._meta.db_table
+        for schema in ALL_READ_SCHEMAS:
+            prefix = f'"{schema}"."'
+            if table.startswith(prefix):
+                tables[schema].add(table.removeprefix(prefix).rstrip('"'))
+    return tables
+
+
+def truncate_read_models() -> None:
+    """Empty every read-side table in one statement.
+
+    Covers ``read_analytics`` and ``read_telemetry``: both are written by
+    projections that a test drives directly, and both must start empty.
+    """
     from django.db import connection
 
-    models = apps.get_app_config("read_models").get_models()
-    tables = ", ".join(model._meta.db_table for model in models)
+    tables = ", ".join(
+        f'"{schema}"."{name}"'
+        for schema, names in read_side_tables().items()
+        for name in sorted(names)
+    )
     with connection.cursor() as cursor:
         cursor.execute(f"TRUNCATE {tables} CASCADE")
 
 
 @pytest.fixture
-def read_side_database(django_ready: None) -> str:
-    """A migrated database whose read models are empty.
+def read_side_database(django_ready: None, read_postgres_dsn: str) -> str:
+    """A migrated read database whose read models are empty, and its DSN.
+
+    The DSN is returned rather than a placeholder so a test that wants to point a
+    process at the read side — the API's query engine, for instance — can do so
+    with the same container Django just migrated.
 
     Synchronous on purpose: Django's ORM and ``transaction.atomic`` are, and the
     projection tests are plain functions that call the same code the consumer
     calls.
     """
     truncate_read_models()
-    return ""
+    return read_postgres_dsn
 
 
 # -----------------------------------------------------------------------------
