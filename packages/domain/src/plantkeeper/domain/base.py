@@ -9,6 +9,7 @@ events an aggregate raises.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import ClassVar
 from uuid import UUID, uuid7
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
@@ -29,6 +30,17 @@ class DomainEvent(BaseModel):
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: ClassVar[int] = 1
+    """The version of this event's *document*, bumped only for a breaking change.
+
+    A class variable rather than a field: the version describes the shape of the
+    event, not one occurrence of it, and putting it in the body would make every
+    payload model's ``extra="forbid"`` a migration hazard. It travels in the
+    ``schema_version`` header with the rest of the provenance (``docs/events.md``).
+    The policy is in ADR 0010: a compatible addition keeps the version, and only a
+    removal, a rename or a type change bumps it.
+    """
 
     event_id: UUID = Field(default_factory=uuid7)
     occurred_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
