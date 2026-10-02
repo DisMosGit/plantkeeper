@@ -16,6 +16,7 @@ from plantkeeper.admin.projections.catalog import SpeciesProjection
 from plantkeeper.admin.projections.garden import GardenProjection
 from plantkeeper.admin.projections.journal import JournalProjection
 from plantkeeper.admin.projections.notifications import NotificationProjection
+from plantkeeper.admin.projections.telemetry import TelemetryRollupProjection
 
 ALL_PROJECTIONS: Final[tuple[Projection, ...]] = (
     GardenProjection(),
@@ -23,6 +24,7 @@ ALL_PROJECTIONS: Final[tuple[Projection, ...]] = (
     SpeciesProjection(),
     NotificationProjection(),
     JournalProjection(),
+    TelemetryRollupProjection(),
 )
 """Every projection, in the order they are subscribed."""
 

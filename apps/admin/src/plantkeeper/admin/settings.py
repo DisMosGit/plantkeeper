@@ -1,10 +1,11 @@
 """Django settings of the read side.
 
-The read side shares the Postgres instance with the write side and nothing else:
-it owns the ``read_analytics`` schema, whose tables come from Django migrations,
-and it reads the same ``.env`` the services read — through
+The read side runs on the Postgres instance of its own: it owns the
+``read_analytics`` and ``read_telemetry`` schemas, whose tables come from Django
+migrations, and it reads the same ``.env`` the services read — through
 :class:`~plantkeeper.infrastructure.config.Settings` — so credentials exist in one
-place instead of two.
+place instead of two. Pointing the ``READ_POSTGRES_*`` values at the write instance
+collapses the two back into one database; that is configuration, not code.
 
 There is no application authentication. Django Admin, however, renders as a user
 and needs its own ``django.contrib.auth`` tables; a single local superuser is
@@ -64,6 +65,7 @@ INSTALLED_APPS: Final = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "plantkeeper.admin.read_models",
+    "plantkeeper.admin.read_telemetry",
 ]
 
 MIDDLEWARE: Final = [
@@ -103,11 +105,15 @@ DATABASES: Final = {
         # Django's PostgreSQL backend speaks psycopg 3; the write side's asyncpg
         # driver is not an option here.
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": _infrastructure.postgres_db,
-        "USER": _infrastructure.postgres_user,
-        "PASSWORD": _infrastructure.postgres_password,
-        "HOST": _infrastructure.postgres_host,
-        "PORT": str(_infrastructure.postgres_port),
+        # The read instance, not the write instance: `read_analytics` (and the
+        # ledger that guards it) is this process's own database. The five values
+        # have the same shape as the write side's, so pointing them at the write
+        # instance is the documented rollback (`docs/runbooks/local-topology.md`).
+        "NAME": _infrastructure.read_postgres_db,
+        "USER": _infrastructure.read_postgres_user,
+        "PASSWORD": _infrastructure.read_postgres_password,
+        "HOST": _infrastructure.read_postgres_host,
+        "PORT": str(_infrastructure.read_postgres_port),
         # The admin process is long-lived: a pooled connection is worth keeping
         # for a minute rather than reopening it for every page.
         "CONN_MAX_AGE": 60,

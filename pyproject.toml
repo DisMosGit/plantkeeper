@@ -67,6 +67,7 @@ known-first-party = ["plantkeeper"]
 # them and build the immutable runtime state themselves. RUF012 would have every
 # one of them annotated ``ClassVar``, which is noise Django never asks for.
 "apps/admin/src/plantkeeper/admin/read_models/**" = ["RUF012"]
+"apps/admin/src/plantkeeper/admin/read_telemetry/**" = ["RUF012"]
 # A gRPC servicer method is named after the proto RPC it implements, and the
 # generated dispatcher calls it by that exact name — ``GetTodayCare`` cannot be
 # lowercased. The generated stubs themselves are gitignored and skipped.

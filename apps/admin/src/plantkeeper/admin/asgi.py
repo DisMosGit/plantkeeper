@@ -28,6 +28,7 @@ from starlette.staticfiles import StaticFiles
 
 from plantkeeper.infrastructure.config import Settings
 from plantkeeper.infrastructure.messaging.broker import build_broker
+from plantkeeper.infrastructure.messaging.publisher import KafkaEventPublisher
 
 
 async def healthz(request: Request) -> PlainTextResponse:
@@ -49,7 +50,15 @@ def create_admin_application(*, settings: Settings | None = None) -> Starlette:
     from plantkeeper.admin.projections.subscriber import register_projections
 
     broker = build_broker(runtime)
-    register_projections(broker, prefix=runtime.read_side_consumer_group_prefix)
+    register_projections(
+        broker,
+        prefix=runtime.read_side_consumer_group_prefix,
+        settings=runtime,
+        # The same thin wrapper the worker uses for its consumers: a projection
+        # that cannot apply an event copies it to the dead-letter topic, which is
+        # a Kafka publish like any other.
+        publisher=KafkaEventPublisher(broker),
+    )
 
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
