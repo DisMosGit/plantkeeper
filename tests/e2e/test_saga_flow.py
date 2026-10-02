@@ -4,14 +4,17 @@ This is Phase 4's acceptance test: ``POST /api/v1/plants`` writes ``PlantAdded``
 the outbox, the relay publishes it, the worker's real consumer registration feeds
 it to ``OnboardPlantSaga`` over a real broker, and the saga's steps leave a care
 schedule, a notification and a published ``PlantOnboarded`` behind.
+
+The worker runs from the suite's one harness (``tests/e2e/conftest.py``), so the
+process this asserts against is the process ``make workers`` runs: the relay, the
+saga consumers, and the dispatcher that executes the cross-context command the
+saga records for the care context.
 """
 
 from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -37,7 +40,6 @@ from plantkeeper.infrastructure.persistence.repositories.catalog import (
     SqlAlchemySpeciesRepository,
 )
 from plantkeeper.infrastructure.persistence.tracking import AggregateTracker
-from plantkeeper.workers.consumers import register_consumers
 
 pytestmark = pytest.mark.slow
 
@@ -49,25 +51,6 @@ WEEK = timedelta(days=7)
 async def session_factory_on(database: str) -> async_sessionmaker[AsyncSession]:
     """A session factory on the test database."""
     return async_sessionmaker(create_async_engine(database), expire_on_commit=False)
-
-
-@asynccontextmanager
-async def running_worker_consumers(settings: Settings) -> AsyncIterator[None]:
-    """Run the worker's saga consumers in-process, as ``make workers`` would.
-
-    The registration function is the production one — the same call
-    ``apps/workers`` makes before it starts the broker — so this exercises the
-    wiring, not a test-only path.
-    """
-    container = make_async_container(*worker_providers())
-    broker = await container.get(KafkaBroker)
-    register_consumers(broker, container=container, settings=settings)
-    await broker.start()
-    try:
-        yield
-    finally:
-        await broker.stop()
-        await container.close()
 
 
 async def publish_the_outbox(settings: Settings) -> None:
@@ -161,31 +144,49 @@ async def wait_for_outbox_event(database: str, event_name: str) -> OutboxModel:
     pytest.fail(f"no {event_name} event appeared in the outbox within {SAGA_TIMEOUT_SECONDS}s")
 
 
+async def wait_for_notifications(database: str, household_id: str) -> list[NotificationModel]:
+    """Poll until the household has a notification, or fail.
+
+    The onboarding notification is the *third* step's recorded command, and the
+    dispatcher executes it on a tick of its own: by the time the saga has written
+    ``PlantOnboarded`` — its fourth step — the command may still be waiting for the
+    next tick, so reading the table once would make this test depend on which tick
+    the saga happened to need.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + SAGA_TIMEOUT_SECONDS
+    factory = await session_factory_on(database)
+    while loop.time() < deadline:
+        async with factory() as session:
+            statement = select(NotificationModel).where(
+                NotificationModel.household_id == uuid.UUID(household_id)
+            )
+            notifications = list((await session.execute(statement)).scalars().all())
+        if notifications:
+            return notifications
+        await asyncio.sleep(POLL_INTERVAL_SECONDS)
+    pytest.fail(f"no notification appeared for household {household_id} within the saga's time")
+
+
 async def test_adding_a_plant_onboards_it(
     api_client: AsyncClient,
     database: str,
     worker_settings: Settings,
+    running_worker: None,
 ) -> None:
     species = await seed_species(database)
     household_id = await create_household(api_client)
     plant_id = await create_plant(api_client, household_id, str(species.id))
 
-    async with running_worker_consumers(worker_settings):
-        await publish_the_outbox(worker_settings)
-        next_watering_at = await wait_for_schedule(database, plant_id)
-        await wait_for_outbox_event(database, "PlantOnboarded")
+    await publish_the_outbox(worker_settings)
+    next_watering_at = await wait_for_schedule(database, plant_id)
+    await wait_for_outbox_event(database, "PlantOnboarded")
+    notifications = await wait_for_notifications(database, household_id)
 
     # The schedule starts one species interval out, so the plant is watered on the
     # catalogue's cadence rather than immediately.
     assert next_watering_at > datetime.now(UTC)
     assert next_watering_at < datetime.now(UTC) + 2 * WEEK
-
-    factory = await session_factory_on(database)
-    async with factory() as session:
-        statement = select(NotificationModel).where(
-            NotificationModel.household_id == uuid.UUID(household_id)
-        )
-        notifications = (await session.execute(statement)).scalars().all()
 
     assert [notification.notification_type for notification in notifications] == ["plant_onboarded"]
     assert notifications[0].payload["plant_id"] == plant_id

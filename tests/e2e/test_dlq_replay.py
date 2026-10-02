@@ -16,20 +16,15 @@ domain rule, and nothing about it is swallowed.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 import subprocess
 import sys
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
 
 import pytest
 from aiokafka import AIOKafkaConsumer
-from dishka import make_async_container
-from faststream.kafka import KafkaBroker
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -37,8 +32,6 @@ from plantkeeper.application.ports.plant_references import PlantReference
 from plantkeeper.domain.care.events import WateringCompleted
 from plantkeeper.domain.identifiers import HouseholdId, PlantId
 from plantkeeper.infrastructure.config import Settings
-from plantkeeper.infrastructure.di.providers import worker_providers
-from plantkeeper.infrastructure.messaging.relay import OutboxRelay
 from plantkeeper.infrastructure.messaging.topics import (
     CARE_EVENTS,
     DLQ_TOPIC,
@@ -55,7 +48,6 @@ from plantkeeper.infrastructure.persistence.repositories.plant_references import
     SqlAlchemyPlantReferenceRepository,
 )
 from plantkeeper.infrastructure.persistence.uow import SqlAlchemyUnitOfWork
-from plantkeeper.workers.consumers import register_consumers, register_telemetry_ingest
 
 pytestmark = pytest.mark.slow
 
@@ -72,25 +64,21 @@ WAIT_SECONDS = 60.0
 fails the test instead of hanging."""
 
 
-@asynccontextmanager
-async def running_worker(settings: Settings) -> AsyncIterator[None]:
-    """Run the worker's consumers and relay in-process, over the real broker."""
-    container = make_async_container(*worker_providers())
-    broker = await container.get(KafkaBroker)
-    relay = await container.get(OutboxRelay)
-    register_consumers(broker, container=container, settings=settings)
-    register_telemetry_ingest(broker, container=container, settings=settings)
-    await broker.start()
-    relay_task = asyncio.create_task(relay.run())
-    try:
-        yield
-    finally:
-        relay.stop()
-        relay_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await relay_task
-        await broker.stop()
-        await container.close()
+@pytest.fixture
+def worker_settings(worker_settings: Settings) -> Settings:
+    """The suite's worker settings, with the failure policy's waiting removed.
+
+    The delivery under test fails on purpose, and what this test is about is what
+    happens *after* the attempts are spent — the copy, the claim, the replay — not
+    the schedule between them, which the unit tests cover. Narrowing the fixture the
+    shared harness runs on is how the worker it starts gets the same settings.
+    """
+    return worker_settings.model_copy(
+        update={
+            "consumer_retry_initial_wait_seconds": 0.0,
+            "consumer_retry_max_wait_seconds": 0.0,
+        }
+    )
 
 
 async def rename_journal_plants(database: str, *, rename: str) -> None:
@@ -306,17 +294,10 @@ async def test_a_failing_delivery_is_dead_lettered_and_replayed(
     database: str,
     kafka_bootstrap_servers: str,
     worker_settings: Settings,
+    running_worker: None,
 ) -> None:
     """Poison, copy, fix, replay, handled — the operator's whole loop."""
-    settings = worker_settings.model_copy(
-        update={
-            # No real waiting between attempts: the schedule itself is asserted in
-            # the unit tests, and this failure is not transient anyway.
-            "consumer_retry_initial_wait_seconds": 0.0,
-            "consumer_retry_max_wait_seconds": 0.0,
-        }
-    )
-    group = f"{settings.worker_consumer_group_prefix}-journal-entries"
+    group = f"{worker_settings.worker_consumer_group_prefix}-journal-entries"
     engine = create_async_engine(database)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     plant_id = PlantId.new()
@@ -324,45 +305,40 @@ async def test_a_failing_delivery_is_dead_lettered_and_replayed(
 
     try:
         await hide_journal_plants(database)
-        async with running_worker(settings):
-            event = await publish_a_watering(session_factory, plant_id)
+        event = await publish_a_watering(session_factory, plant_id)
 
-            copy = await dead_letter_copy(kafka_bootstrap_servers, event.event_id)
-            assert copy is not None, "the failing delivery never reached the dead-letter topic"
-            assert copy[HEADER_CONSUMER_GROUP] == group
-            assert copy[HEADER_ORIGINAL_TOPIC] == CARE_EVENTS
-            assert "plant_refs" in copy[HEADER_ERROR]
-            # The claim is what makes the copy terminal rather than pending.
-            assert await wait_for_claim(
-                session_factory, consumer_group=group, event_id=event.event_id
-            )
-            assert await journal_entries(session_factory, plant_id) == 0
+        copy = await dead_letter_copy(kafka_bootstrap_servers, event.event_id)
+        assert copy is not None, "the failing delivery never reached the dead-letter topic"
+        assert copy[HEADER_CONSUMER_GROUP] == group
+        assert copy[HEADER_ORIGINAL_TOPIC] == CARE_EVENTS
+        assert "plant_refs" in copy[HEADER_ERROR]
+        # The claim is what makes the copy terminal rather than pending.
+        assert await wait_for_claim(session_factory, consumer_group=group, event_id=event.event_id)
+        assert await journal_entries(session_factory, plant_id) == 0
 
-            # The cause is fixed. Replaying is an operator's decision, and the
-            # command refuses to guess: the dry run changes nothing.
-            await restore_journal_plants(database)
-            dry_run = run_replay_command(event.event_id, dry_run=True)
-            assert dry_run.returncode == 0, dry_run.stderr
-            assert "would replay" in dry_run.stdout
-            assert await wait_for_claim(
-                session_factory, consumer_group=group, event_id=event.event_id
-            )
+        # The cause is fixed. Replaying is an operator's decision, and the
+        # command refuses to guess: the dry run changes nothing.
+        await restore_journal_plants(database)
+        dry_run = run_replay_command(event.event_id, dry_run=True)
+        assert dry_run.returncode == 0, dry_run.stderr
+        assert "would replay" in dry_run.stdout
+        assert await wait_for_claim(session_factory, consumer_group=group, event_id=event.event_id)
 
-            replayed = run_replay_command(event.event_id)
-            assert replayed.returncode == 0, replayed.stderr
-            assert "replayed offset" in replayed.stdout
-            assert "write_shared.processed_events" in replayed.stdout
-            assert not await wait_for_claim(
-                session_factory,
-                consumer_group=group,
-                event_id=event.event_id,
-                expected=False,
-            )
+        replayed = run_replay_command(event.event_id)
+        assert replayed.returncode == 0, replayed.stderr
+        assert "replayed offset" in replayed.stdout
+        assert "write_shared.processed_events" in replayed.stdout
+        assert not await wait_for_claim(
+            session_factory,
+            consumer_group=group,
+            event_id=event.event_id,
+            expected=False,
+        )
 
-            assert await wait_for_journal_entry(session_factory, plant_id) == 1
-            # Exactly one copy, ever: the claim committed with it, so a redelivery
-            # the broker made in between was recognised as already dealt with.
-            assert await count_dead_letter_copies(kafka_bootstrap_servers, event.event_id) == 1
+        assert await wait_for_journal_entry(session_factory, plant_id) == 1
+        # Exactly one copy, ever: the claim committed with it, so a redelivery
+        # the broker made in between was recognised as already dealt with.
+        assert await count_dead_letter_copies(kafka_bootstrap_servers, event.event_id) == 1
     finally:
         # Passed or failed, the schema goes back the way it was: the container is
         # shared with the rest of the suite.

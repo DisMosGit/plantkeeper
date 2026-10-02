@@ -7,20 +7,23 @@ Trefle through the real anti-corruption layer — over an in-process transport, 
 no test touches the network — and writes the result to ``write_catalog.species``.
 A species that already existed locally is updated and its cached entry is dropped
 by ``SpeciesCacheConsumer``.
+
+The worker runs from the suite's one harness (``tests/e2e/conftest.py``), with the
+upstream Trefle source replaced by this module; the relay has to keep running, as
+``make workers`` runs it, because the saga's follow-up events are written to the
+outbox while the test waits.
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
 from aiolimiter import AsyncLimiter
-from dishka import Provider, Scope, make_async_container, provide
-from faststream.kafka import KafkaBroker
+from dishka import Provider, Scope, provide
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -33,20 +36,16 @@ from plantkeeper.domain.catalog.values import LightRequirement
 from plantkeeper.domain.identifiers import SpeciesId
 from plantkeeper.domain.values import WateringInterval
 from plantkeeper.infrastructure.cache.species import ValkeySpeciesCache, cache_key
-from plantkeeper.infrastructure.config import Settings
-from plantkeeper.infrastructure.di.providers import worker_providers
 from plantkeeper.infrastructure.external.circuit_breaker import AsyncCircuitBreaker
 from plantkeeper.infrastructure.external.trefle.client import TrefleClient
 from plantkeeper.infrastructure.external.trefle.mapping import species_id_for
 from plantkeeper.infrastructure.external.trefle.source import TrefleSpeciesSource
-from plantkeeper.infrastructure.messaging.relay import OutboxRelay
 from plantkeeper.infrastructure.persistence.models.catalog import SpeciesModel
 from plantkeeper.infrastructure.persistence.models.shared import OutboxModel
 from plantkeeper.infrastructure.persistence.repositories.catalog import (
     SqlAlchemySpeciesRepository,
 )
 from plantkeeper.infrastructure.persistence.tracking import AggregateTracker
-from plantkeeper.workers.consumers import register_consumers
 
 pytestmark = pytest.mark.slow
 
@@ -199,40 +198,26 @@ async def wait_until(predicate: Callable[[], Awaitable[bool]], *, description: s
     raise AssertionError(f"timed out waiting for {description}")
 
 
-@asynccontextmanager
-async def running_worker(settings: Settings) -> AsyncIterator[None]:
-    """Run the real worker: the relay plus every consumer, with the upstream replaced.
+@pytest.fixture
+async def worker_provider_overrides() -> AsyncIterator[Sequence[Provider]]:
+    """Run the worker's saga over an in-process Trefle, not the network.
 
-    The relay has to keep running (as ``make workers`` does): the saga's own
-    follow-up events — ``SpeciesUpdated`` and ``SpeciesCacheInvalidated`` — are
-    written to the outbox *while* the test waits, and only a running relay
-    publishes them to the cache consumer.
+    The shared harness builds the worker's container and starts it
+    (``tests/e2e/conftest.py``); the upstream is the one dependency this test
+    substitutes, and handing it over as a provider keeps that harness the single
+    definition of what the suite runs.
     """
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(catalogue_handler), base_url="https://trefle.test/api/v1/"
     ) as trefle_client:
-        container = make_async_container(
-            *worker_providers(), FakeTrefleProvider(a_trefle_source(trefle_client))
-        )
-        broker = await container.get(KafkaBroker)
-        relay = await container.get(OutboxRelay)
-        register_consumers(broker, container=container, settings=settings)
-        await broker.start()
-        relay_task = asyncio.create_task(relay.run())
-        try:
-            yield
-        finally:
-            relay.stop()
-            await relay_task
-            await broker.stop()
-            await container.close()
+        yield (FakeTrefleProvider(a_trefle_source(trefle_client)),)
 
 
 async def test_the_manual_sync_pulls_the_catalogue_and_drops_the_stale_cache_entry(
     api_client: AsyncClient,
     database: str,
-    worker_settings: Settings,
     valkey_url: str,
+    running_worker: None,
 ) -> None:
     known_id = species_id_for(CACHED_SLUG)
     await seed_species(database, known_id)
@@ -251,23 +236,22 @@ async def test_the_manual_sync_pulls_the_catalogue_and_drops_the_stale_cache_ent
     )
 
     try:
-        async with running_worker(worker_settings):
-            response = await api_client.post("/api/v1/catalog/sync")
-            assert response.status_code == 202, response.text
+        response = await api_client.post("/api/v1/catalog/sync")
+        assert response.status_code == 202, response.text
 
-            async def all_species_are_local() -> bool:
-                return await count_species(database) == SPECIES_COUNT
+        async def all_species_are_local() -> bool:
+            return await count_species(database) == SPECIES_COUNT
 
-            async def the_update_landed() -> bool:
-                updated = await read_species(database, known_id)
-                return updated is not None and updated.common_name == CACHED_SLUG
+        async def the_update_landed() -> bool:
+            updated = await read_species(database, known_id)
+            return updated is not None and updated.common_name == CACHED_SLUG
 
-            async def the_cache_entry_is_gone() -> bool:
-                return await client.get(cache_key(known_id)) is None
+        async def the_cache_entry_is_gone() -> bool:
+            return await client.get(cache_key(known_id)) is None
 
-            await wait_until(all_species_are_local, description=f"{SPECIES_COUNT} species")
-            await wait_until(the_update_landed, description="the upstream update")
-            await wait_until(the_cache_entry_is_gone, description="the cache invalidation")
+        await wait_until(all_species_are_local, description=f"{SPECIES_COUNT} species")
+        await wait_until(the_update_landed, description="the upstream update")
+        await wait_until(the_cache_entry_is_gone, description="the cache invalidation")
     finally:
         await client.aclose()
 

@@ -27,8 +27,6 @@ import httpx
 import pytest
 import uvicorn
 from aiokafka import AIOKafkaProducer
-from dishka import make_async_container
-from faststream.kafka import KafkaBroker
 from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -40,9 +38,6 @@ from plantkeeper.domain.identifiers import HouseholdId, PlantId, SensorId
 from plantkeeper.domain.notifications.notification import Notification
 from plantkeeper.domain.notifications.values import NotificationType
 from plantkeeper.domain.telemetry.sensor import Sensor
-from plantkeeper.infrastructure.config import Settings
-from plantkeeper.infrastructure.di.providers import worker_providers
-from plantkeeper.infrastructure.messaging.relay import OutboxRelay
 from plantkeeper.infrastructure.messaging.topics import TELEMETRY_RAW
 from plantkeeper.infrastructure.notifications.channel import ValkeyNotificationChannel
 from plantkeeper.infrastructure.persistence.repositories.notifications import (
@@ -52,7 +47,6 @@ from plantkeeper.infrastructure.persistence.repositories.telemetry import (
     SqlAlchemySensorRepository,
 )
 from plantkeeper.infrastructure.persistence.tracking import AggregateTracker
-from plantkeeper.workers.consumers import register_consumers, register_telemetry_ingest
 
 pytestmark = pytest.mark.slow
 
@@ -160,27 +154,6 @@ async def next_notification(lines: AsyncIterator[str], *, timeout: float) -> Not
 def session_factory_on(database: str) -> async_sessionmaker[AsyncSession]:
     """A session factory over the test database."""
     return async_sessionmaker(create_async_engine(database), expire_on_commit=False)
-
-
-@asynccontextmanager
-async def running_worker(settings: Settings) -> AsyncIterator[None]:
-    """Run the worker's consumers and relay in-process, as ``make workers`` does."""
-    container = make_async_container(*worker_providers())
-    broker = await container.get(KafkaBroker)
-    relay = await container.get(OutboxRelay)
-    register_consumers(broker, container=container, settings=settings)
-    register_telemetry_ingest(broker, container=container, settings=settings)
-    await broker.start()
-    relay_task = asyncio.create_task(relay.run())
-    try:
-        yield
-    finally:
-        relay.stop()
-        relay_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await relay_task
-        await broker.stop()
-        await container.close()
 
 
 async def create_household(client: AsyncClient) -> str:
@@ -293,7 +266,7 @@ async def test_a_notification_appears_on_an_open_stream(
     database: str,
     kafka_bootstrap_servers: str,
     streaming_environment: None,
-    worker_settings: Settings,
+    running_worker: None,
 ) -> None:
     """Dry telemetry → notification in the database → a frame on the open stream."""
     async with running_api() as client:
@@ -301,10 +274,9 @@ async def test_a_notification_appears_on_an_open_stream(
         sensor_id = SensorId(uuid4())
         await register_sensor(database, sensor_id=sensor_id, plant_id=plant_id)
 
-        async with (
-            running_worker(worker_settings),
-            client.stream("GET", STREAM_PATH, params={"household_id": household_id}) as response,
-        ):
+        async with client.stream(
+            "GET", STREAM_PATH, params={"household_id": household_id}
+        ) as response:
             assert response.status_code == 200, response.text
             assert response.headers["content-type"].startswith("text/event-stream")
             lines = response.aiter_lines()

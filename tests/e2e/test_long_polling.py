@@ -1,10 +1,10 @@
 """End-to-end test of notification long polling.
 
 Phase 8's acceptance test: a domain fact produces a ``Notification``, and a client
-blocked in ``GET /api/v1/notifications/pending`` is woken and receives it. The
-pieces are the production ones — ``register_consumers``, ``register_telemetry_ingest``,
-``OutboxRelay`` and the real HTTP application — so the test exercises the wiring
-rather than a test-only path.
+blocked in ``GET /api/v1/notifications/pending`` is woken and receives it. The worker
+runs from the suite's one harness (``tests/e2e/conftest.py``) and the client talks to
+the real HTTP application, so the test exercises the wiring rather than a test-only
+path.
 
 The telemetry route is the shortest one that needs no scheduler: a dry reading goes
 to ``telemetry.raw``, the ingress stores it and raises ``TelemetryReceived`` +
@@ -16,17 +16,12 @@ waiting on.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
 from aiokafka import AIOKafkaProducer
-from dishka import make_async_container
-from faststream.kafka import KafkaBroker
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -35,9 +30,6 @@ from plantkeeper.domain.identifiers import HouseholdId, PlantId, SensorId
 from plantkeeper.domain.notifications.notification import Notification
 from plantkeeper.domain.notifications.values import NotificationType
 from plantkeeper.domain.telemetry.sensor import Sensor
-from plantkeeper.infrastructure.config import Settings
-from plantkeeper.infrastructure.di.providers import worker_providers
-from plantkeeper.infrastructure.messaging.relay import OutboxRelay
 from plantkeeper.infrastructure.messaging.topics import TELEMETRY_RAW
 from plantkeeper.infrastructure.persistence.models.notifications import NotificationModel
 from plantkeeper.infrastructure.persistence.repositories.notifications import (
@@ -47,7 +39,6 @@ from plantkeeper.infrastructure.persistence.repositories.telemetry import (
     SqlAlchemySensorRepository,
 )
 from plantkeeper.infrastructure.persistence.tracking import AggregateTracker
-from plantkeeper.workers.consumers import register_consumers, register_telemetry_ingest
 
 pytestmark = pytest.mark.slow
 
@@ -62,33 +53,6 @@ SEEDED_TIMEOUT_SECONDS = 30.0
 def session_factory_on(database: str) -> async_sessionmaker[AsyncSession]:
     """A session factory over the test database."""
     return async_sessionmaker(create_async_engine(database), expire_on_commit=False)
-
-
-@asynccontextmanager
-async def running_worker(settings: Settings) -> AsyncIterator[None]:
-    """Run the worker's consumers and relay in-process.
-
-    The registration calls are the production ones — the same two ``apps/workers``
-    makes before it starts the broker — so the test exercises the wiring, not a
-    test-only path. The relay runs in the background because the pipeline crosses
-    it twice: the ingress's events out, and the notification's event out again.
-    """
-    container = make_async_container(*worker_providers())
-    broker = await container.get(KafkaBroker)
-    relay = await container.get(OutboxRelay)
-    register_consumers(broker, container=container, settings=settings)
-    register_telemetry_ingest(broker, container=container, settings=settings)
-    await broker.start()
-    relay_task = asyncio.create_task(relay.run())
-    try:
-        yield
-    finally:
-        relay.stop()
-        relay_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await relay_task
-        await broker.stop()
-        await container.close()
 
 
 async def publish_dry_reading(
@@ -164,25 +128,24 @@ async def test_a_long_poll_receives_a_notification_the_worker_created(
     api_client: AsyncClient,
     database: str,
     kafka_bootstrap_servers: str,
-    worker_settings: Settings,
+    running_worker: None,
 ) -> None:
     """Dry telemetry → notification in the database → the waiting client is answered."""
     household_id, plant_id = await create_household_and_plant(api_client)
     sensor_id = SensorId(uuid4())
     await register_sensor(database, sensor_id=sensor_id, plant_id=plant_id)
 
-    async with running_worker(worker_settings):
-        poll = asyncio.create_task(
-            api_client.get(
-                "/api/v1/notifications/pending",
-                params={"household_id": household_id, "timeout": POLL_TIMEOUT_SECONDS},
-            )
+    poll = asyncio.create_task(
+        api_client.get(
+            "/api/v1/notifications/pending",
+            params={"household_id": household_id, "timeout": POLL_TIMEOUT_SECONDS},
         )
-        # Give the poll a moment to subscribe; the endpoint re-reads after
-        # subscribing and again at its deadline, so this is not a race.
-        await asyncio.sleep(1.0)
-        await publish_dry_reading(kafka_bootstrap_servers, sensor_id=sensor_id)
-        response = await poll
+    )
+    # Give the poll a moment to subscribe; the endpoint re-reads after
+    # subscribing and again at its deadline, so this is not a race.
+    await asyncio.sleep(1.0)
+    await publish_dry_reading(kafka_bootstrap_servers, sensor_id=sensor_id)
+    response = await poll
 
     assert response.status_code == 200, response.text
     items = response.json()["items"]

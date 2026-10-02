@@ -11,16 +11,15 @@ outbox row has to be stamped correctly.
 
 The rows are read straight from ``write_shared.outbox``, because that is where the
 contract is frozen: the relay publishes what the write side recorded and derives
-nothing (``docs/events.md``). The saga is driven through the production worker
-registration, so this exercises the real binding rather than a stand-in.
+nothing (``docs/events.md``). The saga is driven through the suite's shared worker
+harness (``tests/e2e/conftest.py``), so this exercises the real binding rather than a
+stand-in.
 """
 
 from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from datetime import timedelta
 
 import pytest
@@ -48,7 +47,6 @@ from plantkeeper.infrastructure.persistence.repositories.catalog import (
     SqlAlchemySpeciesRepository,
 )
 from plantkeeper.infrastructure.persistence.tracking import AggregateTracker
-from plantkeeper.workers.consumers import register_consumers
 
 pytestmark = pytest.mark.slow
 
@@ -60,25 +58,6 @@ WEEK = timedelta(days=7)
 async def session_factory_on(database: str) -> async_sessionmaker[AsyncSession]:
     """A session factory on the test database."""
     return async_sessionmaker(create_async_engine(database), expire_on_commit=False)
-
-
-@asynccontextmanager
-async def running_worker_consumers(settings: Settings) -> AsyncIterator[None]:
-    """Run the worker's consumers in-process, as ``make workers`` would.
-
-    The registration function is the production one — the same call
-    ``apps/workers`` makes before it starts the broker — so the provenance a
-    consumer binds here is bound by the real handler.
-    """
-    container = make_async_container(*worker_providers())
-    broker = await container.get(KafkaBroker)
-    register_consumers(broker, container=container, settings=settings)
-    await broker.start()
-    try:
-        yield
-    finally:
-        await broker.stop()
-        await container.close()
 
 
 async def publish_the_outbox(settings: Settings) -> None:
@@ -293,6 +272,7 @@ async def test_a_saga_step_is_attributed_to_the_saga(
     api_client: AsyncClient,
     database: str,
     worker_settings: Settings,
+    running_worker: None,
 ) -> None:
     """The onboarding saga names itself, and keeps the request's conversation.
 
@@ -317,12 +297,10 @@ async def test_a_saga_step_is_attributed_to_the_saga(
     assert response.status_code == 201, response.text
 
     added = (await outbox_rows(database, event_name="PlantAdded"))[0]
-    await outbox_rows(database)  # keep the rows readable before the worker starts
 
-    async with running_worker_consumers(worker_settings):
-        await publish_the_outbox(worker_settings)
-        started = await wait_for_outbox_event(database, "SagaStarted")
-        completed = await wait_for_outbox_event(database, "SagaCompleted")
+    await publish_the_outbox(worker_settings)
+    started = await wait_for_outbox_event(database, "SagaStarted")
+    completed = await wait_for_outbox_event(database, "SagaCompleted")
 
     # The request's conversation reached the plant event...
     assert added.raised_by == API_RAISER

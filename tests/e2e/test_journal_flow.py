@@ -6,16 +6,16 @@ The acceptance test: a watering goes through the real API, the relay publishes
 carries the entry. The dated endpoint is then asked the same question: what did the
 journal look like before that day, and on it?
 
-The pieces the API and the worker share are the production ones, so this exercises
-the wiring rather than a test-only path.
+The worker runs from the suite's one harness (``tests/e2e/conftest.py``), so the
+pieces the API and the worker share are the production ones and the flow is the one
+``make workers`` runs.
 """
 
 from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -40,7 +40,6 @@ from plantkeeper.infrastructure.persistence.repositories.catalog import (
     SqlAlchemySpeciesRepository,
 )
 from plantkeeper.infrastructure.persistence.tracking import AggregateTracker
-from plantkeeper.workers.consumers import register_consumers
 
 pytestmark = pytest.mark.slow
 
@@ -74,24 +73,6 @@ async def poll_until[PolledT](
             return found
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
     pytest.fail(f"{description} did not happen within {timeout}s")
-
-
-@asynccontextmanager
-async def running_worker_consumers(settings: Settings) -> AsyncIterator[None]:
-    """Run the worker's consumers in-process, as ``make workers`` would.
-
-    The registration call is the production one — the same call ``apps/workers``
-    makes before it starts the broker — so this exercises the wiring.
-    """
-    container = make_async_container(*worker_providers())
-    broker = await container.get(KafkaBroker)
-    register_consumers(broker, container=container, settings=settings)
-    await broker.start()
-    try:
-        yield
-    finally:
-        await broker.stop()
-        await container.close()
 
 
 async def publish_the_outbox(settings: Settings) -> None:
@@ -186,33 +167,37 @@ async def a_watered_plant(
     settings: Settings,
     project_outbox: Callable[[], Awaitable[int]],
 ) -> tuple[str, datetime]:
-    """Onboard one plant and water it, returning its id and the care moment."""
+    """Onboard one plant and water it, returning its id and the care moment.
+
+    The worker runs for the whole test (``running_worker``, ``tests/e2e/conftest.py``):
+    the onboarding is finished by the dispatcher executing the care command the saga
+    records, and the watering has to reach the journal's consumer.
+    """
     species = await seed_species(database)
     household_id = await create_household(api_client)
     plant_id = await create_plant(api_client, household_id, str(species.id))
 
-    async with running_worker_consumers(settings):
-        await publish_the_outbox(settings)
-        await wait_for_schedule(database, plant_id)
+    await publish_the_outbox(settings)
+    await wait_for_schedule(database, plant_id)
 
-        watered = await api_client.post(f"/api/v1/care/{plant_id}/water")
-        assert watered.status_code == 200, watered.text
-        care_moment = await watering_completed_at(database)
+    watered = await api_client.post(f"/api/v1/care/{plant_id}/water")
+    assert watered.status_code == 200, watered.text
+    care_moment = await watering_completed_at(database)
 
-        await publish_the_outbox(settings)
+    await publish_the_outbox(settings)
 
-        async def journalled() -> list[dict[str, object]] | None:
-            # The timeline is a read-model answer, and this test runs the
-            # write-side consumers, not the read side's. Projecting the outbox
-            # each round puts the entry the worker produced into the read model
-            # the endpoint reads, without a broker in between.
-            await project_outbox()
-            response = await api_client.get(f"/api/v1/journal/{plant_id}")
-            assert response.status_code == 200, response.text
-            items: list[dict[str, object]] = response.json()["items"]
-            return items or None
+    async def journalled() -> list[dict[str, object]] | None:
+        # The timeline is a read-model answer, and this test runs the
+        # write-side consumers, not the read side's. Projecting the outbox
+        # each round puts the entry the worker produced into the read model
+        # the endpoint reads, without a broker in between.
+        await project_outbox()
+        response = await api_client.get(f"/api/v1/journal/{plant_id}")
+        assert response.status_code == 200, response.text
+        items: list[dict[str, object]] = response.json()["items"]
+        return items or None
 
-        await poll_until(journalled, description="the watering reaching the journal")
+    await poll_until(journalled, description="the watering reaching the journal")
 
     return plant_id, care_moment
 
@@ -222,6 +207,7 @@ async def test_a_watering_through_http_lands_in_the_event_sourced_journal(
     database: str,
     worker_settings: Settings,
     project_outbox: Callable[[], Awaitable[int]],
+    running_worker: None,
 ) -> None:
     plant_id, care_moment = await a_watered_plant(
         api_client, database, worker_settings, project_outbox
@@ -244,6 +230,7 @@ async def test_the_journal_can_be_replayed_to_a_past_date(
     database: str,
     worker_settings: Settings,
     project_outbox: Callable[[], Awaitable[int]],
+    running_worker: None,
 ) -> None:
     plant_id, care_moment = await a_watered_plant(
         api_client, database, worker_settings, project_outbox

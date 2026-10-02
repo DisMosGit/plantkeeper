@@ -9,10 +9,18 @@ commands commit to and the read instance the list/report queries answer from. A
 test that does not need the read models never opens the read engine — the API's
 provider is lazy — but the environment always names both instances, exactly as
 ``.env`` does.
+
+The worker side has **one** definition, :func:`running_worker`, and the event
+topics are emptied before every test that starts a consumer
+(:func:`isolated_broker`): a test observes the events it publishes itself and
+none of the ones its predecessors left on the shared broker, so the suite answers
+the same way however often it is run.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import os
 from collections.abc import AsyncIterator, Sequence
 from urllib.parse import urlparse
@@ -24,6 +32,8 @@ import pytest
 from aiokafka import AIOKafkaConsumer, TopicPartition
 from aiokafka.admin import AIOKafkaAdminClient
 from aiokafka.admin.records_to_delete import RecordsToDelete
+from dishka import Provider, make_async_container
+from faststream.kafka import KafkaBroker
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -31,8 +41,14 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from plantkeeper.api.grpc.server import run_grpc_server
 from plantkeeper.api.main import create_app
 from plantkeeper.infrastructure.config import Settings
+from plantkeeper.infrastructure.di.providers import worker_providers
+from plantkeeper.infrastructure.messaging.relay import OutboxRelay
 from plantkeeper.infrastructure.messaging.topics import DLQ_TOPIC, EVENT_TOPICS, event_type_for
 from plantkeeper.infrastructure.persistence.models.shared import OutboxModel
+from plantkeeper.infrastructure.scheduling.command_dispatch import CommandDispatcher
+from plantkeeper.infrastructure.scheduling.job import BackgroundJob
+from plantkeeper.workers.consumers import register_consumers, register_telemetry_ingest
+from plantkeeper.workers.main import build_background_jobs, build_unbound_saga_storage
 
 # Django is configured at import time, before pytest imports the test modules: a
 # read model cannot be defined until ``INSTALLED_APPS`` is loaded, and pytest
@@ -394,3 +410,88 @@ async def isolated_broker(broker_settings: Settings, kafka_bootstrap_servers: st
     await delete_records_on(
         kafka_bootstrap_servers, topics_the_platform_publishes_events_on(broker_settings)
     )
+
+
+# -----------------------------------------------------------------------------
+# The write-side worker
+# -----------------------------------------------------------------------------
+
+
+@pytest.fixture
+def worker_provider_overrides() -> Sequence[Provider]:
+    """Providers a module adds to the worker's container, replacing one dependency.
+
+    Empty for every module but ``test_catalog_sync``, which runs the real
+    catalogue saga over an in-process Trefle transport: the harness is shared, the
+    upstream one module substitutes is that module's business.
+    """
+    return ()
+
+
+def command_dispatcher(jobs: Sequence[BackgroundJob]) -> CommandDispatcher:
+    """Return the dispatcher of the workers target's own job list.
+
+    Taken from ``build_background_jobs`` rather than built here, so the harness
+    reads the production list: if the worker stops running a dispatcher — the
+    component that executes a saga's recorded cross-context commands
+    (``docs/adr/0012-saga-command-dispatch.md``) — this is the line that fails,
+    instead of eight modules that keep passing against a process that no longer
+    exists.
+    """
+    for job in jobs:
+        if isinstance(job, CommandDispatcher):
+            return job
+    raise AssertionError("the workers target runs no CommandDispatcher, which the e2e suite runs")
+
+
+@pytest.fixture
+async def running_worker(
+    worker_settings: Settings,
+    worker_provider_overrides: Sequence[Provider],
+    isolated_broker: None,
+) -> AsyncIterator[None]:
+    """Run the write-side worker in-process, as ``make workers`` does.
+
+    The production wiring, not a test-only path: the relay that publishes the
+    outbox, the same ``register_consumers`` and ``register_telemetry_ingest`` the
+    worker calls before it starts the broker, and the ``CommandDispatcher`` from
+    the worker's own job list. A cross-context flow therefore completes here for
+    the same reason it completes under ``make workers``.
+
+    The interval-driven timers of that job list are deliberately **not** started:
+    a ``BackgroundJob``'s first tick fires immediately, so a missed-care or
+    silence tick would produce facts inside a test that never asked for one. A
+    test whose flow needs a timer drives it explicitly, as ``test_iot_flow`` does.
+
+    Registration happens after :func:`isolated_broker` emptied the topics, so the
+    groups started here are offered this test's events and no earlier test's.
+    """
+    container = make_async_container(*worker_providers(), *worker_provider_overrides)
+    broker = await container.get(KafkaBroker)
+    relay = await container.get(OutboxRelay)
+    jobs = build_background_jobs(
+        container=container,
+        settings=worker_settings,
+        storage=await build_unbound_saga_storage(container),
+    )
+    dispatcher = command_dispatcher(jobs)
+
+    # Routes must exist before the broker starts: FastStream refuses to add them
+    # to a running broker.
+    register_consumers(broker, container=container, settings=worker_settings)
+    register_telemetry_ingest(broker, container=container, settings=worker_settings)
+    await broker.start()
+
+    tasks = [asyncio.create_task(relay.run()), asyncio.create_task(dispatcher.run())]
+    try:
+        yield
+    finally:
+        relay.stop()
+        dispatcher.stop()
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        await broker.stop()
+        await container.close()

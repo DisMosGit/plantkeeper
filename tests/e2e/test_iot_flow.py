@@ -5,24 +5,22 @@ worker's real ingress registration stores each reading and announces it through
 its outbox, the relay publishes ``TelemetryReceived``, and ``AdaptiveWateringSaga``
 moves a care schedule forward because the soil is dry.
 
-The pieces the simulator, the worker and the saga share are the production ones —
-``register_telemetry_ingest``, ``register_consumers`` and ``OutboxRelay`` — so this
-exercises the wiring rather than a test-only path.
+The pieces the simulator, the worker and the saga share are the production ones,
+started from the suite's one harness (``tests/e2e/conftest.py``): the telemetry
+ingress, the saga consumers, the relay and the command dispatcher, so this exercises
+the wiring rather than a test-only path.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from aiokafka import AIOKafkaProducer
 from dishka import make_async_container
-from faststream.kafka import KafkaBroker
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -34,7 +32,6 @@ from plantkeeper.domain.telemetry.sensor import OFFLINE_AFTER, Sensor
 from plantkeeper.domain.values import WateringInterval
 from plantkeeper.infrastructure.config import Settings
 from plantkeeper.infrastructure.di.providers import worker_providers
-from plantkeeper.infrastructure.messaging.relay import OutboxRelay
 from plantkeeper.infrastructure.messaging.topics import TELEMETRY_RAW
 from plantkeeper.infrastructure.persistence.models.notifications import (
     NotificationModel,
@@ -61,7 +58,6 @@ from plantkeeper.iot_simulator.simulator import (
     SensorSimulatorConfig,
     sensor_id_for,
 )
-from plantkeeper.workers.consumers import register_consumers, register_telemetry_ingest
 
 pytestmark = pytest.mark.slow
 
@@ -103,34 +99,6 @@ async def poll_until[PolledT](
             return found
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
     pytest.fail(f"{description} did not happen within {timeout}s")
-
-
-@asynccontextmanager
-async def running_worker(settings: Settings) -> AsyncIterator[None]:
-    """Run the worker's ingress, saga consumers and relay in-process.
-
-    The registration calls are the production ones — the same two ``apps/workers``
-    makes before it starts the broker — so the test exercises the wiring, not a
-    test-only path. The relay runs in the background here because the pipeline has
-    two hops through it: the reading's event out, and the saga's reschedule back
-    in.
-    """
-    container = make_async_container(*worker_providers())
-    broker = await container.get(KafkaBroker)
-    relay = await container.get(OutboxRelay)
-    register_consumers(broker, container=container, settings=settings)
-    register_telemetry_ingest(broker, container=container, settings=settings)
-    await broker.start()
-    relay_task = asyncio.create_task(relay.run())
-    try:
-        yield
-    finally:
-        relay.stop()
-        relay_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await relay_task
-        await broker.stop()
-        await container.close()
 
 
 async def publish_raw(bootstrap_servers: str, readings: list[Reading]) -> None:
@@ -228,7 +196,7 @@ async def test_a_simulated_stream_reaches_the_telemetry_table(
     api_client: AsyncClient,
     database: str,
     kafka_bootstrap_servers: str,
-    worker_settings: Settings,
+    running_worker: None,
 ) -> None:
     """Simulator → ``telemetry.raw`` → ingress → readings table + outbox event."""
     _, plant_id = await a_household_and_plant(api_client)
@@ -247,14 +215,13 @@ async def test_a_simulated_stream_reaches_the_telemetry_table(
     readings = simulator.readings(datetime.now(UTC))
     assert readings, "the scenario must produce at least one reading"
 
-    async with running_worker(worker_settings):
-        await publish_raw(kafka_bootstrap_servers, readings)
+    await publish_raw(kafka_bootstrap_servers, readings)
 
-        async def find_reading() -> TelemetryReading | None:
-            stored = await stored_readings(database, plant_id)
-            return stored[0] if stored else None
+    async def find_reading() -> TelemetryReading | None:
+        stored = await stored_readings(database, plant_id)
+        return stored[0] if stored else None
 
-        stored = await poll_until(find_reading, description="the reading reaching the table")
+    stored = await poll_until(find_reading, description="the reading reaching the table")
 
     assert stored.sensor_id == sensor_id
     assert stored.recorded_at == readings[0].recorded_at
@@ -266,7 +233,7 @@ async def test_dry_telemetry_moves_the_watering_forward(
     api_client: AsyncClient,
     database: str,
     kafka_bootstrap_servers: str,
-    worker_settings: Settings,
+    running_worker: None,
 ) -> None:
     """The simulator's drought scenario is enough to trip ``AdaptiveWateringSaga``."""
     _, plant_id = await a_household_and_plant(api_client)
@@ -291,18 +258,15 @@ async def test_dry_telemetry_moves_the_watering_forward(
     readings = simulator.readings(datetime.now(UTC))
     assert readings and readings[0].moisture < 30.0, "drought starts below the low threshold"
 
-    async with running_worker(worker_settings):
-        await publish_raw(kafka_bootstrap_servers, readings)
+    await publish_raw(kafka_bootstrap_servers, readings)
 
-        async def moved_forward() -> CareSchedule | None:
-            schedule = await current_schedule(database, plant_id)
-            if schedule is None or schedule.next_watering_at >= scheduled_for:
-                return None
-            return schedule
+    async def moved_forward() -> CareSchedule | None:
+        schedule = await current_schedule(database, plant_id)
+        if schedule is None or schedule.next_watering_at >= scheduled_for:
+            return None
+        return schedule
 
-        schedule = await poll_until(
-            moved_forward, description="the saga moving the watering forward"
-        )
+    schedule = await poll_until(moved_forward, description="the saga moving the watering forward")
 
     assert schedule.version == 2
     assert schedule.next_watering_at <= datetime.now(UTC) + timedelta(seconds=5)
@@ -364,6 +328,7 @@ async def test_a_silent_sensor_is_announced_once_and_reaches_the_household(
     database: str,
     kafka_bootstrap_servers: str,
     worker_settings: Settings,
+    running_worker: None,
 ) -> None:
     """The whole silence path: reading → persisted last-seen → timer → reminder.
 
@@ -371,6 +336,9 @@ async def test_a_silent_sensor_is_announced_once_and_reaches_the_household(
     halves that make it real — the ingress's ``last_seen_at`` write and the timer —
     and follows the event through the relay and the notification consumer to the
     household's pending list, twice, to show the second tick announces nothing.
+
+    The timer is the one component the shared harness leaves out, so this test drives
+    it explicitly: a tick of its own, twice, rather than waiting for a schedule.
     """
     household_id, plant_id = await a_household_and_plant(api_client)
     sensor_id = SensorId(sensor_id_for(SIMULATOR_BASE_ID, 0))
@@ -386,41 +354,40 @@ async def test_a_silent_sensor_is_announced_once_and_reaches_the_household(
     )
     readings = simulator.readings(datetime.now(UTC))
 
-    async with running_worker(worker_settings):
-        await publish_raw(kafka_bootstrap_servers, readings)
+    await publish_raw(kafka_bootstrap_servers, readings)
 
-        async def reported() -> SensorModel | None:
-            model = await stored_sensor(database, sensor_id)
-            return model if model is not None and model.last_seen_at is not None else None
+    async def reported() -> SensorModel | None:
+        model = await stored_sensor(database, sensor_id)
+        return model if model is not None and model.last_seen_at is not None else None
 
-        sensor = await poll_until(reported, description="the ingress persisting last_seen_at")
-        assert sensor.offline_announced_at is None
+    sensor = await poll_until(reported, description="the ingress persisting last_seen_at")
+    assert sensor.offline_announced_at is None
 
-        # The reminder needs the household, which arrives as PlantAdded; wait for the
-        # reference so a dropped delivery cannot make this test flaky.
-        await poll_until(
-            lambda: the_household_knows_the_plant(database, plant_id),
-            description="the notifications context learning the plant",
+    # The reminder needs the household, which arrives as PlantAdded; wait for the
+    # reference so a dropped delivery cannot make this test flaky.
+    await poll_until(
+        lambda: the_household_knows_the_plant(database, plant_id),
+        description="the notifications context learning the plant",
+    )
+
+    await backdate_last_seen(database, sensor_id, seconds=OFFLINE_AFTER.total_seconds() * 2)
+
+    job_container = make_async_container(*worker_providers())
+    try:
+        job = SensorSilenceJob(
+            container=job_container, settings=worker_settings, interval_seconds=1
         )
+        assert await job.run_once() == 1
+        # A second tick during the same silence announces nothing.
+        assert await job.run_once() == 0
+    finally:
+        await job_container.close()
 
-        await backdate_last_seen(database, sensor_id, seconds=OFFLINE_AFTER.total_seconds() * 2)
+    async def delivered() -> list[str] | None:
+        types = await pending_notification_types(api_client, household_id)
+        return types if "sensor_offline" in types else None
 
-        job_container = make_async_container(*worker_providers())
-        try:
-            job = SensorSilenceJob(
-                container=job_container, settings=worker_settings, interval_seconds=1
-            )
-            assert await job.run_once() == 1
-            # A second tick during the same silence announces nothing.
-            assert await job.run_once() == 0
-        finally:
-            await job_container.close()
-
-        async def delivered() -> list[str] | None:
-            types = await pending_notification_types(api_client, household_id)
-            return types if "sensor_offline" in types else None
-
-        announced = await poll_until(delivered, description="the offline reminder arriving")
+    announced = await poll_until(delivered, description="the offline reminder arriving")
 
     assert announced.count("sensor_offline") == 1
     assert await matched_outbox_names(database, "SensorOffline") == ["SensorOffline"]

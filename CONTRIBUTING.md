@@ -166,4 +166,19 @@ tools/*        ← independent
 | E2E | `tests/e2e/` | `@pytest.mark.slow` |
 | Contract | `tests/unit/contracts/` | — |
 
+An end-to-end test that consumes events asks for the shared `running_worker` fixture in
+`tests/e2e/conftest.py`; it starts the components `make workers` runs for that flow —
+the relay, the consumer groups, the telemetry ingress and the command dispatcher, whose
+recorded cross-context commands a saga's flow depends on — and stops them with the
+test. Do not start a worker of your own: a copy is what let the suite drift from the
+worker it claims to run, and the interval-driven timers are deliberately out of it (a
+test that needs one drives it explicitly, as `tests/e2e/test_iot_flow.py` does).
+
+Every test that starts a consumer is isolated from the events earlier tests published:
+the suite empties the platform's event topics — derived from `EVENT_TOPICS`, the raw
+telemetry topic and the dead-letter topic — before the consumer groups start, so a
+fresh group at `auto_offset_reset="earliest"` is offered this test's events and nothing
+else. The suite answers the same way however often it is run; `tests/e2e/test_broker_isolation.py`
+pins that down.
+
 No `time.sleep()` — use `freezegun` or `anyio`.
