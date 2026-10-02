@@ -30,13 +30,20 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from plantkeeper.domain.care.schedule import CareSchedule
 from plantkeeper.domain.identifiers import PlantId, SensorId
 from plantkeeper.domain.telemetry.reading import TelemetryReading
-from plantkeeper.domain.telemetry.sensor import Sensor
+from plantkeeper.domain.telemetry.sensor import OFFLINE_AFTER, Sensor
 from plantkeeper.domain.values import WateringInterval
 from plantkeeper.infrastructure.config import Settings
 from plantkeeper.infrastructure.di.providers import worker_providers
 from plantkeeper.infrastructure.messaging.relay import OutboxRelay
 from plantkeeper.infrastructure.messaging.topics import TELEMETRY_RAW
+from plantkeeper.infrastructure.persistence.models.notifications import (
+    NotificationModel,
+)
+from plantkeeper.infrastructure.persistence.models.plant_refs import (
+    NotificationPlantReferenceModel,
+)
 from plantkeeper.infrastructure.persistence.models.shared import OutboxModel
+from plantkeeper.infrastructure.persistence.models.telemetry import SensorModel
 from plantkeeper.infrastructure.persistence.repositories.care import (
     SqlAlchemyCareScheduleRepository,
 )
@@ -45,6 +52,7 @@ from plantkeeper.infrastructure.persistence.repositories.telemetry import (
     SqlAlchemyTelemetryRepository,
 )
 from plantkeeper.infrastructure.persistence.tracking import AggregateTracker
+from plantkeeper.infrastructure.scheduling.sensor_silence import SensorSilenceJob
 from plantkeeper.iot_simulator.scenarios import DROUGHT_SCENARIO
 from plantkeeper.iot_simulator.simulator import (
     JSON_TOPIC,
@@ -304,3 +312,126 @@ async def test_dry_telemetry_moves_the_watering_forward(
 def test_the_simulator_and_the_worker_agree_on_the_topic() -> None:
     """A rename on either side would make the pipeline silently do nothing."""
     assert JSON_TOPIC == TELEMETRY_RAW
+
+
+# --- The silence timer --------------------------------------------------------
+
+
+async def stored_sensor(database: str, sensor_id: SensorId) -> SensorModel | None:
+    """The registry row of one sensor, or ``None`` before it has reported."""
+    factory = server_factory_on(database)
+    async with factory() as session:
+        return await session.get(SensorModel, sensor_id.value)
+
+
+async def backdate_last_seen(database: str, sensor_id: SensorId, *, seconds: float) -> None:
+    """Move a sensor's last-seen instant into the past.
+
+    The silence period is ten real minutes and the suite cannot wait that long. The
+    timer reads the instant the ingress persisted, which is what makes it testable
+    without waiting: only the *clock* the timer compares against is the wall clock.
+    """
+    factory = server_factory_on(database)
+    async with factory() as session:
+        model = await session.get(SensorModel, sensor_id.value)
+        assert model is not None and model.last_seen_at is not None
+        model.last_seen_at = model.last_seen_at - timedelta(seconds=seconds)
+        await session.commit()
+
+
+async def the_household_knows_the_plant(database: str, plant_id: PlantId) -> bool:
+    """Whether the notifications context has the reference the reminder needs."""
+    factory = server_factory_on(database)
+    async with factory() as session:
+        statement = select(NotificationPlantReferenceModel).where(
+            NotificationPlantReferenceModel.plant_id == plant_id.value
+        )
+        return (await session.execute(statement)).first() is not None
+
+
+async def pending_notification_types(client: AsyncClient, household_id: str) -> list[str]:
+    """The unread notifications of a household, as the API reports them."""
+    response = await client.get(
+        "/api/v1/notifications/pending", params={"household_id": household_id}
+    )
+    if response.status_code != 200:
+        return []
+    return [item["notification_type"] for item in response.json()["items"]]
+
+
+async def test_a_silent_sensor_is_announced_once_and_reaches_the_household(
+    api_client: AsyncClient,
+    database: str,
+    kafka_bootstrap_servers: str,
+    worker_settings: Settings,
+) -> None:
+    """The whole silence path: reading → persisted last-seen → timer → reminder.
+
+    ``SensorOffline`` was catalogued long before it could fire. This drives the two
+    halves that make it real — the ingress's ``last_seen_at`` write and the timer —
+    and follows the event through the relay and the notification consumer to the
+    household's pending list, twice, to show the second tick announces nothing.
+    """
+    household_id, plant_id = await a_household_and_plant(api_client)
+    sensor_id = SensorId(sensor_id_for(SIMULATOR_BASE_ID, 0))
+    await seed_plant_with_sensor(database, sensor_id=sensor_id, plant_id=plant_id)
+    simulator = SensorSimulator(
+        SensorSimulatorConfig(
+            sensor_count=1,
+            base_id=SIMULATOR_BASE_ID,
+            scenario=DROUGHT_SCENARIO,
+            seed=42,
+            step_seconds=10.0,
+        )
+    )
+    readings = simulator.readings(datetime.now(UTC))
+
+    async with running_worker(worker_settings):
+        await publish_raw(kafka_bootstrap_servers, readings)
+
+        async def reported() -> SensorModel | None:
+            model = await stored_sensor(database, sensor_id)
+            return model if model is not None and model.last_seen_at is not None else None
+
+        sensor = await poll_until(reported, description="the ingress persisting last_seen_at")
+        assert sensor.offline_announced_at is None
+
+        # The reminder needs the household, which arrives as PlantAdded; wait for the
+        # reference so a dropped delivery cannot make this test flaky.
+        await poll_until(
+            lambda: the_household_knows_the_plant(database, plant_id),
+            description="the notifications context learning the plant",
+        )
+
+        await backdate_last_seen(database, sensor_id, seconds=OFFLINE_AFTER.total_seconds() * 2)
+
+        job_container = make_async_container(*worker_providers())
+        try:
+            job = SensorSilenceJob(
+                container=job_container, settings=worker_settings, interval_seconds=1
+            )
+            assert await job.run_once() == 1
+            # A second tick during the same silence announces nothing.
+            assert await job.run_once() == 0
+        finally:
+            await job_container.close()
+
+        async def delivered() -> list[str] | None:
+            types = await pending_notification_types(api_client, household_id)
+            return types if "sensor_offline" in types else None
+
+        announced = await poll_until(delivered, description="the offline reminder arriving")
+
+    assert announced.count("sensor_offline") == 1
+    assert await matched_outbox_names(database, "SensorOffline") == ["SensorOffline"]
+
+    factory = server_factory_on(database)
+    async with factory() as session:
+        statement = select(NotificationModel).where(
+            NotificationModel.notification_type == "sensor_offline"
+        )
+        [notification] = list((await session.execute(statement)).scalars().all())
+    assert notification.payload["plant_id"] == str(plant_id)
+    offline_for = notification.payload["offline_for_seconds"]
+    assert isinstance(offline_for, int | float)
+    assert float(offline_for) >= OFFLINE_AFTER.total_seconds()

@@ -19,12 +19,18 @@ from plantkeeper.infrastructure.persistence.partitions import (
     add_months,
     default_partition_name,
     default_partition_statement,
+    drop_expired_partitions,
+    drop_statement,
     ensure_telemetry_partitions,
+    expired_partitions,
+    month_from_partition_name,
     month_of,
     months_to_create,
     next_month,
     partition_name,
     partition_statement,
+    previous_month,
+    retention_cutoff,
     statements_for,
 )
 
@@ -163,3 +169,92 @@ async def test_only_the_missing_partitions_are_created() -> None:
         f"{TELEMETRY_PARTITIONED_TABLE}_202610",
     ]
     assert len(session.executed) == 2
+
+
+def test_the_previous_month_rolls_the_year_back() -> None:
+    assert previous_month(date(2026, 1, 1)) == date(2025, 12, 1)
+    assert previous_month(date(2026, 9, 1)) == date(2026, 8, 1)
+
+
+def test_adding_months_can_walk_backwards() -> None:
+    assert add_months(date(2026, 2, 1), -3) == date(2025, 11, 1)
+    assert add_months(date(2026, 1, 1), -12) == date(2025, 1, 1)
+    assert add_months(date(2026, 9, 20), 0) == date(2026, 9, 1)
+
+
+def test_the_retention_cutoff_is_whole_months_before_the_current_one() -> None:
+    assert retention_cutoff(today=date(2026, 7, 15), retention_months=12) == date(2025, 7, 1)
+    assert retention_cutoff(today=date(2026, 1, 3), retention_months=1) == date(2025, 12, 1)
+    assert retention_cutoff(today=date(2026, 1, 3), retention_months=0) == date(2026, 1, 1)
+
+
+def test_a_negative_retention_window_is_refused() -> None:
+    with pytest.raises(ValueError, match="retention_months"):
+        retention_cutoff(today=date(2026, 7, 15), retention_months=-1)
+
+
+def test_a_partition_name_is_read_back_as_its_month() -> None:
+    assert month_from_partition_name("sensor_readings_202609") == date(2026, 9, 1)
+    assert month_from_partition_name("sensor_readings_default") is None
+    assert month_from_partition_name("sensor_readings") is None
+    assert month_from_partition_name("sensor_readings_20260") is None
+    assert month_from_partition_name("something_else_202609") is None
+
+
+def test_only_a_partition_entirely_beyond_the_window_expires() -> None:
+    present = {
+        "sensor_readings_202505",
+        "sensor_readings_202506",
+        "sensor_readings_202507",
+        "sensor_readings_202607",
+        "sensor_readings_default",
+    }
+
+    expired = expired_partitions(present, today=date(2026, 7, 15), retention_months=12)
+
+    # June 2025 ends exactly at the cutoff and is entirely outside; July 2025
+    # overlaps the window and stays.
+    assert expired == [
+        (date(2025, 5, 1), f"{TELEMETRY_PARTITIONED_TABLE}_202505"),
+        (date(2025, 6, 1), f"{TELEMETRY_PARTITIONED_TABLE}_202506"),
+    ]
+
+
+def test_a_drop_statement_is_idempotent() -> None:
+    assert drop_statement(date(2026, 9, 1)) == (
+        f"DROP TABLE IF EXISTS {TELEMETRY_PARTITIONED_TABLE}_202609"
+    )
+
+
+async def test_an_unmigrated_database_has_nothing_to_drop() -> None:
+    session = FakeSession(parent=False)
+
+    dropped = await drop_expired_partitions(
+        session,  # type: ignore[arg-type]
+        today=date(2026, 7, 15),
+        retention_months=12,
+    )
+
+    assert dropped == []
+    assert session.executed == []
+
+
+async def test_only_the_expired_partitions_are_dropped() -> None:
+    session = FakeSession(
+        parent=True,
+        partitions={"sensor_readings_default", "sensor_readings_202505", "sensor_readings_202506"},
+    )
+
+    dropped = await drop_expired_partitions(
+        session,  # type: ignore[arg-type]
+        today=date(2026, 7, 15),
+        retention_months=12,
+    )
+
+    assert dropped == [
+        f"{TELEMETRY_PARTITIONED_TABLE}_202505",
+        f"{TELEMETRY_PARTITIONED_TABLE}_202506",
+    ]
+    # The catch-all partition is never dropped: it holds readings whose month never
+    # had a partition of its own.
+    assert all("default" not in statement for statement in session.executed)

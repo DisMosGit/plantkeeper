@@ -19,6 +19,7 @@ def sensor_to_domain(model: SensorModel) -> Sensor:
         plant_id=PlantId(model.plant_id),
         added_at=model.added_at,
         last_seen_at=model.last_seen_at,
+        offline_announced_at=model.offline_announced_at,
     )
 
 
@@ -29,6 +30,7 @@ def sensor_to_model(sensor: Sensor) -> SensorModel:
         plant_id=sensor.plant_id.value,
         added_at=sensor.added_at,
         last_seen_at=sensor.last_seen_at,
+        offline_announced_at=sensor.offline_announced_at,
     )
 
 

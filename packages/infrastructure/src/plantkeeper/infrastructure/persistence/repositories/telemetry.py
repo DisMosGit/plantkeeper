@@ -75,6 +75,26 @@ class SqlAlchemySensorRepository:
         models = (await self._session.execute(statement)).scalars()
         return [sensor_to_domain(model) for model in models]
 
+    async def list_silent(self, threshold: datetime) -> list[Sensor]:
+        """List the sensors past the threshold whose silence has not been announced.
+
+        Oldest silence first, so a backlog of quiet sensors is announced in the
+        order they went quiet. A sensor that never reported is not a candidate: it
+        has not gone silent, it has never spoken, and the aggregate refuses to call
+        that offline.
+        """
+        statement = (
+            select(SensorModel)
+            .where(
+                SensorModel.last_seen_at.is_not(None),
+                SensorModel.last_seen_at <= threshold,
+                SensorModel.offline_announced_at.is_(None),
+            )
+            .order_by(SensorModel.last_seen_at, SensorModel.id)
+        )
+        models = (await self._session.execute(statement)).scalars()
+        return [sensor_to_domain(model) for model in models]
+
 
 class SqlAlchemyTelemetryRepository:
     """The ``TelemetryRepository`` port over SQLAlchemy."""

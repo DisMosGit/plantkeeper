@@ -15,13 +15,15 @@ from plantkeeper.infrastructure.persistence.schemas import WRITE_TELEMETRY
 class SensorModel(Base):
     """The ``write_telemetry.sensors`` table.
 
-    Only the sensor registry lives on the write side in Phase 2. The readings
-    themselves arrive with the telemetry ingress in Phase 5 and get their own
-    time-partitioned table (:class:`SensorReadingModel`).
+    Only the sensor registry lives on the write side. The readings themselves get
+    their own time-partitioned table (:class:`SensorReadingModel`).
 
-    ``last_seen_at`` is *not* advanced by every reading: that would be a write per
-    measurement to answer a question no reader asks, and the readings table already
-    holds the last one.
+    ``last_seen_at`` *is* advanced by every stored reading, and
+    ``offline_announced_at`` records when the sensor's current silence was
+    announced (``None`` while it is reporting, cleared by the next reading). The
+    two columns are what the silence timer polls: without them it would have to
+    scan the readings table to answer "which sensors have gone quiet"
+    (``docs/telemetry.md``).
     """
 
     __tablename__ = "sensors"
@@ -34,6 +36,9 @@ class SensorModel(Base):
     plant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    offline_announced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class SensorReadingModel(Base):
