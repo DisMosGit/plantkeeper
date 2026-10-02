@@ -19,10 +19,11 @@ from uuid import UUID, uuid4
 import pytest
 from cqrs.dispatcher.saga import SagaDispatcher
 from cqrs.saga.storage.enums import SagaStatus
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from plantkeeper.application.ports.catalog import SpeciesRecord
+from plantkeeper.application.ports.saga_intents import IntentStatus, SagaIntent
 from plantkeeper.application.sagas.adapters import OutboxSpeciesCache, RepositorySpeciesCatalog
 from plantkeeper.application.sagas.contexts import OnboardPlantContext
 from plantkeeper.application.sagas.onboard import (
@@ -48,7 +49,6 @@ from plantkeeper.domain.garden.household import Household
 from plantkeeper.domain.garden.plant import Plant
 from plantkeeper.domain.identifiers import HouseholdId, PlantId, SpeciesId
 from plantkeeper.domain.values import Location, WateringInterval
-from plantkeeper.infrastructure.persistence.mappers.care import care_schedule_to_domain
 from plantkeeper.infrastructure.persistence.models.care import CareScheduleModel
 from plantkeeper.infrastructure.persistence.models.notifications import NotificationModel
 from plantkeeper.infrastructure.persistence.models.shared import (
@@ -58,6 +58,9 @@ from plantkeeper.infrastructure.persistence.models.shared import (
 )
 from plantkeeper.infrastructure.persistence.repositories.catalog import (
     SqlAlchemySpeciesRepository,
+)
+from plantkeeper.infrastructure.persistence.repositories.sagas import (
+    SqlAlchemySagaIntentRepository,
 )
 from plantkeeper.infrastructure.persistence.saga_storage import SqlAlchemySagaStorage
 from plantkeeper.infrastructure.persistence.tracking import AggregateTracker
@@ -185,6 +188,18 @@ async def saga_status(
         return SagaStatus(model.status)
 
 
+async def saga_intents(
+    session_factory: async_sessionmaker[AsyncSession], saga_id: UUID
+) -> list[SagaIntent]:
+    """Return one saga's recorded commands, oldest first.
+
+    Read through the repository rather than the table, because the repository is
+    what the dispatcher uses and a bug in its mapping would otherwise hide here.
+    """
+    async with session_factory() as session:
+        return await SqlAlchemySagaIntentRepository(session).pending_for_saga(saga_id)
+
+
 async def saga_step_actions(
     session_factory: async_sessionmaker[AsyncSession], saga_id: UUID
 ) -> list[tuple[str, str]]:
@@ -264,19 +279,27 @@ async def test_onboarding_creates_the_schedule_the_reminder_and_the_event(
         * 4
     )
 
+    # The saga wrote no other context's table. It recorded what it wanted done,
+    # and that is all: the care and notification rows below do not exist yet.
     async with session_factory() as session:
-        schedule_model = await session.get(CareScheduleModel, plant_id.value)
-        assert schedule_model is not None
-        schedule = care_schedule_to_domain(schedule_model)
-        assert schedule.next_watering_at == NOW + WEEK
-        notifications = (await session.execute(select(NotificationModel))).scalars().all()
-        assert len(notifications) == 1
-        assert notifications[0].notification_type == "plant_onboarded"
+        assert await session.get(CareScheduleModel, plant_id.value) is None
+        assert (await session.execute(select(NotificationModel))).scalars().all() == []
 
+    # It recorded exactly two commands, in step order, and their payloads are the
+    # commands the owning contexts will execute.
+    intents = await saga_intents(session_factory, saga_id)
+    assert [intent.command_name for intent in intents] == [
+        "CreateCareScheduleCommand",
+        "CreateOnboardingNotificationCommand",
+    ]
+    assert [intent.status for intent in intents] == [IntentStatus.PENDING, IntentStatus.PENDING]
+    assert intents[0].payload["plant_id"] == str(plant_id)
+    assert intents[0].payload["watering_interval_seconds"] == WEEK.total_seconds()
+
+    # The only domain event the saga raised itself is the announcement, because
+    # the other two belong to the contexts that will make them.
     assert (await outbox_event_names(session_factory))[seeded:] == [
         "SagaStarted",
-        "CareScheduleCreated",
-        "NotificationCreated",
         "PlantOnboarded",
         "SagaCompleted",
     ]
@@ -717,3 +740,256 @@ async def test_a_failing_cache_step_removes_what_the_sync_created(
     assert names.count("SpeciesAdded") == 1
     assert names.count("SpeciesUpdated") == 2
     assert "SagaCompensated" in names
+
+
+# --- The step's transaction carries its checkpoint -----------------------------
+
+
+async def test_a_committed_step_keeps_its_effect_and_its_record_in_step(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A step's effect and its history entry are durable together, or not at all.
+
+    This is the window ``docs/sagas.md`` used to list as a known limitation. The
+    engine checkpointed in a session of its own, so ``saga_log`` could call a step
+    completed while the effect that step claimed to have made was still sitting in
+    the request's transaction — and a later failure that rolled that transaction
+    back left the two disagreeing, with the platform believing a schedule existed
+    that did not.
+
+    The run is bound to the unit of work now, so the checkpoint *is* the step's
+    transaction. Here step 3 commits a notification and step 4 then fails: the
+    notification's history entry is still there, its compensation is recorded, and
+    the effect is gone — the three agree with each other rather than the log
+    claiming something that never happened.
+    """
+    species_id = SpeciesId.new()
+    await seed_species(session_factory, species_id)
+    household_id, plant_id = await seed_plant(session_factory, species_id)
+    saga = OnboardPlantSaga(SqlAlchemySagaStorage(session_factory))
+    clock = FakeClock(NOW)
+
+    async with session_factory() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        bound = bound_storage(session_factory, session, uow)
+        steps: dict[type, object] = {
+            ResolveSpeciesStep: ResolveSpeciesStep(RepositorySpeciesCatalog(uow.species)),
+            CreateCareScheduleStep: CreateCareScheduleStep(uow, clock),
+            CreateOnboardingNotificationStep: CreateOnboardingNotificationStep(uow, clock),
+            PublishPlantOnboardedStep: ExplodingPublishStep(uow, clock),
+        }
+        event = a_plant_added(household_id, plant_id, species_id)
+        saga_id = saga.saga_id_for(saga.context_from_event(event))
+        with pytest.raises(RuntimeError, match="outbox is unavailable"):
+            await saga.handle_event(
+                event, dispatcher=a_dispatcher(saga, steps, bound), unit_of_work=uow
+            )
+        await session.rollback()
+
+    # Step 3 really did complete — the engine committed it with its checkpoint.
+    assert await step_transition_present(
+        session_factory, saga_id, "CreateOnboardingNotificationStep", "act", "completed"
+    )
+    # Step 4 never completed, so its own history records no completion. Its
+    # *failure* transition is not kept either: it travelled in the transaction the
+    # run discarded with the step's half-written work, and the error it carried is
+    # in the ``SagaFailed`` event below instead.
+    assert not await step_transition_present(
+        session_factory, saga_id, "PublishPlantOnboardedStep", "act", "completed"
+    )
+    assert "SagaFailed" in await outbox_event_names(session_factory)
+
+    # The compensation is recorded for exactly the steps the log calls completed,
+    # and the effects agree: both are gone.
+    assert await step_transition_present(
+        session_factory, saga_id, "CreateOnboardingNotificationStep", "compensate", "completed"
+    )
+    async with session_factory() as session:
+        assert (await session.execute(select(NotificationModel))).scalars().all() == []
+        assert await session.get(CareScheduleModel, plant_id.value) is None
+    assert await saga_status(session_factory, saga_id) is SagaStatus.FAILED
+
+
+async def test_a_step_commits_its_effect_its_history_its_checkpoint_and_its_event(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """The four things one step leaves behind are all durable, and all consistent.
+
+    The effect (the schedule), the ``saga_log`` entry for the step, the
+    ``saga_state`` checkpoint and the lifecycle outbox row are read back together:
+    a success leaves all four, and the step history agrees with the state.
+    """
+    species_id = SpeciesId.new()
+    await seed_species(session_factory, species_id)
+    household_id, plant_id = await seed_plant(session_factory, species_id)
+    saga = OnboardPlantSaga(SqlAlchemySagaStorage(session_factory))
+    clock = FakeClock(NOW)
+
+    async with session_factory() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        bound = bound_storage(session_factory, session, uow)
+        steps: dict[type, object] = {
+            ResolveSpeciesStep: ResolveSpeciesStep(RepositorySpeciesCatalog(uow.species)),
+            CreateCareScheduleStep: CreateCareScheduleStep(uow, clock),
+            CreateOnboardingNotificationStep: CreateOnboardingNotificationStep(uow, clock),
+            PublishPlantOnboardedStep: PublishPlantOnboardedStep(uow, clock),
+        }
+        event = a_plant_added(household_id, plant_id, species_id)
+        saga_id = saga.saga_id_for(saga.context_from_event(event))
+        assert await saga.handle_event(
+            event, dispatcher=a_dispatcher(saga, steps, bound), unit_of_work=uow
+        )
+
+    # The recorded commands survived the run's checkpoints.
+    intents = await saga_intents(session_factory, saga_id)
+    assert len(intents) == 2
+    assert all(intent.status is IntentStatus.PENDING for intent in intents)
+
+    # The checkpoint agrees with the history: every step the log calls completed
+    # is one the persisted context records as done.
+    assert await saga_status(session_factory, saga_id) is SagaStatus.COMPLETED
+    actions = await saga_step_actions(session_factory, saga_id)
+    assert actions.count(("act", "completed")) == 4
+    async with session_factory() as session:
+        state = await session.get(SagaStateModel, saga_id)
+        assert state is not None
+        # ``SagaContext.to_dict`` camel-cases the field names.
+        assert state.context["careScheduleCreated"] is True
+        assert state.context["notificationId"] is not None
+
+    names = await outbox_event_names(session_factory)
+    assert names[-2:] == ["PlantOnboarded", "SagaCompleted"]
+    assert "SagaStarted" in names
+
+
+async def test_a_checkpoint_commit_does_not_lose_the_step_s_events(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Committing a checkpoint drains the aggregates' events into the outbox.
+
+    The run commits through the unit of work rather than the raw session, so the
+    events the step's aggregate raised are appended on the way past. Committing the
+    session directly would leave ``CareScheduleCreated`` unappended and the event
+    would be lost silently — the failure mode this pins.
+    """
+    species_id = SpeciesId.new()
+    await seed_species(session_factory, species_id)
+    household_id, plant_id = await seed_plant(session_factory, species_id)
+    seeded = len(await outbox_event_names(session_factory))
+    saga = OnboardPlantSaga(SqlAlchemySagaStorage(session_factory))
+    clock = FakeClock(NOW)
+
+    async with session_factory() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        bound = bound_storage(session_factory, session, uow)
+        steps: dict[type, object] = {
+            ResolveSpeciesStep: ResolveSpeciesStep(RepositorySpeciesCatalog(uow.species)),
+            CreateCareScheduleStep: CreateCareScheduleStep(uow, clock),
+            CreateOnboardingNotificationStep: CreateOnboardingNotificationStep(uow, clock),
+            PublishPlantOnboardedStep: PublishPlantOnboardedStep(uow, clock),
+        }
+        event = a_plant_added(household_id, plant_id, species_id)
+        await saga.handle_event(
+            event, dispatcher=a_dispatcher(saga, steps, bound), unit_of_work=uow
+        )
+
+    assert (await outbox_event_names(session_factory))[seeded:] == [
+        "SagaStarted",
+        "PlantOnboarded",
+        "SagaCompleted",
+    ]
+
+
+async def step_transition_present(
+    session_factory: async_sessionmaker[AsyncSession],
+    saga_id: UUID,
+    step_name: str,
+    action: str,
+    status: str,
+) -> bool:
+    """Whether one named step recorded a particular transition."""
+    async with session_factory() as session:
+        statement = select(SagaLogModel).where(
+            SagaLogModel.saga_id == saga_id,
+            SagaLogModel.step_name == step_name,
+            SagaLogModel.action == action,
+            SagaLogModel.status == status,
+        )
+        return (await session.execute(statement)).scalars().first() is not None
+
+
+def bound_storage(
+    session_factory: async_sessionmaker[AsyncSession],
+    session: AsyncSession,
+    unit_of_work: SqlAlchemyUnitOfWork,
+) -> SqlAlchemySagaStorage:
+    """The request-bound saga storage, as the worker's container builds it.
+
+    This is the binding production uses: ``SagaProvider.request_saga_storage``
+    hands the engine the request's own session and the unit of work that commits
+    it, so every checkpoint the engine takes is the request's transaction.
+    ``SqlAlchemySagaStorage(session_factory)`` on its own — what the recovery job
+    gets — is the unbound one whose runs own their session.
+    """
+    return SqlAlchemySagaStorage(session_factory, session=session, committer=unit_of_work)
+
+
+async def test_the_documented_inspection_sql_runs_as_written(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """``docs/sagas.md``'s inspection queries execute against the real schema.
+
+    Documentation that does not run is worse than no documentation: an operator
+    reaches for these at the worst possible moment. ``$1`` is how the document
+    writes the saga id, so the test binds it the same way, through the driver.
+    """
+    species_id = SpeciesId.new()
+    await seed_species(session_factory, species_id)
+    household_id, plant_id = await seed_plant(session_factory, species_id)
+    saga = OnboardPlantSaga(SqlAlchemySagaStorage(session_factory))
+    clock = FakeClock(NOW)
+
+    async with session_factory() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        bound = bound_storage(session_factory, session, uow)
+        steps: dict[type, object] = {
+            ResolveSpeciesStep: ResolveSpeciesStep(RepositorySpeciesCatalog(uow.species)),
+            CreateCareScheduleStep: CreateCareScheduleStep(uow, clock),
+            CreateOnboardingNotificationStep: CreateOnboardingNotificationStep(uow, clock),
+            PublishPlantOnboardedStep: PublishPlantOnboardedStep(uow, clock),
+        }
+        event = a_plant_added(household_id, plant_id, species_id)
+        saga_id = saga.saga_id_for(saga.context_from_event(event))
+        await saga.handle_event(
+            event, dispatcher=a_dispatcher(saga, steps, bound), unit_of_work=uow
+        )
+
+    async with session_factory() as session:
+        states = await session.execute(
+            text(
+                "SELECT id, name, status, version, recovery_attempts, created_at, updated_at"
+                "  FROM write_shared.saga_state ORDER BY updated_at DESC"
+            )
+        )
+        assert any(row.id == saga_id for row in states)
+
+        log = await session.execute(
+            text(
+                "SELECT step_name, action, status, details, created_at"
+                "  FROM write_shared.saga_log WHERE saga_id = :saga_id"
+                " ORDER BY created_at, id"
+            ),
+            {"saga_id": saga_id},
+        )
+        assert [row.status for row in log].count("completed") >= 4
+
+        processed = await session.execute(
+            text(
+                "SELECT consumer_group, event_id, processed_at"
+                "  FROM write_shared.processed_events"
+                " WHERE consumer_group = 'plantkeeper-worker-onboard-plant'"
+                " ORDER BY processed_at DESC LIMIT 20"
+            )
+        )
+        assert processed is not None
+        await session.rollback()

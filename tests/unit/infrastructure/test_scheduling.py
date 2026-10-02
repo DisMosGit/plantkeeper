@@ -21,6 +21,7 @@ from plantkeeper.infrastructure.config import Settings
 from plantkeeper.infrastructure.scheduling.job import BackgroundJob
 from plantkeeper.infrastructure.scheduling.missed_care import MissedCareScheduler
 from plantkeeper.infrastructure.scheduling.saga_recovery import SagaRecoveryJob
+from plantkeeper.infrastructure.scheduling.sensor_silence import SensorSilenceJob
 from plantkeeper.infrastructure.scheduling.species_sync import SpeciesSyncScheduler
 
 TICK = 0.01
@@ -65,10 +66,15 @@ def build_jobs() -> list[BackgroundJob]:
             settings=settings,
             interval_seconds=TICK,
         ),
+        SensorSilenceJob(container=container, settings=settings, interval_seconds=TICK),
     ]
 
 
-@pytest.mark.parametrize("index", [0, 1, 2], ids=["missed-care", "species-sync", "saga-recovery"])
+@pytest.mark.parametrize(
+    "index",
+    [0, 1, 2, 3],
+    ids=["missed-care", "species-sync", "saga-recovery", "sensor-silence"],
+)
 async def test_a_job_returns_once_it_is_stopped(index: int) -> None:
     job = build_jobs()[index]
     task = asyncio.create_task(job.run())

@@ -35,6 +35,7 @@ from plantkeeper.application.ports.repositories import (
     SpeciesRepository,
     TelemetryRepository,
 )
+from plantkeeper.application.ports.saga_intents import SagaIntentRepository
 from plantkeeper.application.ports.sagas import (
     MissedCareWindowRepository,
     ProcessedEventRepository,
@@ -69,6 +70,7 @@ from plantkeeper.infrastructure.persistence.repositories.outbox import (
 from plantkeeper.infrastructure.persistence.repositories.sagas import (
     SqlAlchemyMissedCareWindowRepository,
     SqlAlchemyProcessedEventRepository,
+    SqlAlchemySagaIntentRepository,
     SqlAlchemySagaStateRepository,
 )
 from plantkeeper.infrastructure.persistence.repositories.telemetry import (
@@ -105,6 +107,7 @@ class SqlAlchemyUnitOfWork:
         self._processed_events = SqlAlchemyProcessedEventRepository(session)
         self._saga_states = SqlAlchemySagaStateRepository(session)
         self._missed_care_windows = SqlAlchemyMissedCareWindowRepository(session)
+        self._saga_intents = SqlAlchemySagaIntentRepository(session)
 
     @property
     def plants(self) -> PlantRepository:
@@ -180,6 +183,11 @@ class SqlAlchemyUnitOfWork:
     def missed_care_windows(self) -> MissedCareWindowRepository:
         """Missed-care grace windows, bound to this transaction."""
         return self._missed_care_windows
+
+    @property
+    def saga_intents(self) -> SagaIntentRepository:
+        """Recorded cross-context commands, bound to this transaction."""
+        return self._saga_intents
 
     async def __aenter__(self) -> Self:
         """Enter the transaction.

@@ -12,6 +12,18 @@ shared by the two entry points the protocol offers: the per-call methods (each
 opening its own session and committing) and :meth:`create_run`, the checkpointed
 run the engine prefers. Writing the queries twice would be the easy way for the
 two paths to drift.
+
+**Where a run commits is the whole point of this module.** The engine calls
+``run.commit()`` at every checkpoint — after creating the saga, after each step,
+after recording a failure — and those commits are what make a step durable. If the
+run owns a session of its own, a step's effect (committed by the step handler
+through the request's unit of work) and the checkpoint that records the step land
+in *different* transactions, and a crash in between leaves the platform claiming
+progress it never made. So a run opened over a bounded session commits **that**
+session, through the unit of work, which is what puts the effect, the step-history
+entry, the checkpoint and the lifecycle outbox row in one transaction. A run with
+no bounded session — the recovery job, which has no request — opens its own and
+behaves as before.
 """
 
 from __future__ import annotations
@@ -19,7 +31,7 @@ from __future__ import annotations
 import contextlib
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Literal, Protocol
 from uuid import UUID
 
 from cqrs.saga.storage.enums import SagaStatus, SagaStepStatus
@@ -34,8 +46,38 @@ from plantkeeper.infrastructure.persistence.models.shared import (
     SagaStateModel,
 )
 
-RECOVERABLE_STATUSES = (SagaStatus.RUNNING.value, SagaStatus.COMPENSATING.value)
-"""The two statuses a crash can leave behind; everything else is terminal."""
+CRASHED_STATUSES = (SagaStatus.RUNNING.value, SagaStatus.COMPENSATING.value)
+"""The two statuses a crash can leave behind.
+
+A process in either may simply have stopped mid-step; the recovery job resumes it
+from its step history.
+"""
+
+RETRYABLE_STATUSES = (SagaStatus.FAILED.value,)
+"""A recorded failure the recovery job retries, within its budget.
+
+The engine refuses to run a ``failed`` saga forward — it reads that status as
+"compensation was completed, do not resume" — so the recovery job clears the status
+before handing it back, and parks the record once the budget is spent
+(``docs/sagas.md``).
+"""
+
+
+class SagaCommitter(Protocol):
+    """The transaction a saga run commits into.
+
+    Narrower than ``UnitOfWork`` on purpose: the storage needs to commit the
+    caller's transaction and to know nothing else about it, and the per-call
+    entry points have no unit of work at all.
+    """
+
+    async def commit(self) -> None:
+        """Commit the transaction."""
+        ...
+
+    async def rollback(self) -> None:
+        """Discard the transaction."""
+        ...
 
 
 class _SagaStatements:
@@ -154,11 +196,11 @@ class _SagaStatements:
         stale_after_seconds: int | None = None,
         saga_name: str | None = None,
     ) -> list[UUID]:
-        """Return unfinished sagas, least recently updated first."""
+        """Return sagas worth resuming: crashed ones, and failed ones with budget left."""
         statement = (
             select(SagaStateModel.id)
             .where(
-                SagaStateModel.status.in_(RECOVERABLE_STATUSES),
+                SagaStateModel.status.in_(CRASHED_STATUSES + RETRYABLE_STATUSES),
                 SagaStateModel.recovery_attempts < max_recovery_attempts,
             )
             .order_by(SagaStateModel.updated_at, SagaStateModel.id)
@@ -190,6 +232,21 @@ class _SagaStatements:
         if (await self._session.execute(statement)).scalar_one_or_none() is None:
             raise ValueError(f"saga {saga_id} not found")
 
+    async def reset_for_retry(self, saga_id: UUID) -> None:
+        """Clear the status and the recovery counter together."""
+        statement = (
+            update(SagaStateModel)
+            .where(SagaStateModel.id == saga_id)
+            .values(
+                status=SagaStatus.RUNNING.value,
+                recovery_attempts=0,
+                version=SagaStateModel.version + 1,
+            )
+            .returning(SagaStateModel.id)
+        )
+        if (await self._session.execute(statement)).scalar_one_or_none() is None:
+            raise ValueError(f"saga {saga_id} does not exist")
+
     async def set_recovery_attempts(self, saga_id: UUID, attempts: int) -> None:
         """Set the recovery counter to an explicit value."""
         statement = (
@@ -208,11 +265,27 @@ def _as_action(raw: str) -> Literal["act", "compensate"]:
 
 
 class _SagaStorageRun:
-    """The checkpointed run: one session, committed by the caller."""
+    """The checkpointed run over one session.
 
-    def __init__(self, session: AsyncSession) -> None:
+    ``committer`` is what ``commit()`` delegates to. When the run is bound to a
+    request's unit of work that is the unit of work, so the checkpoint travels
+    with the step's effect and the events the aggregate raised. When it is not,
+    the run owns its session and the committer is that session.
+
+    Being bound changes one thing about ``commit()`` beyond *which* transaction it
+    ends. The engine, on a step failure, logs the failure and then commits — it has
+    no rollback on that path. With a session of its own that was harmless, because
+    the step's half-finished work lived in a different transaction and vanished
+    with it. Sharing the session, the same commit would *keep* half-finished work
+    that the step never committed, so this run discards it instead: see
+    :meth:`log_step` and :meth:`commit`.
+    """
+
+    def __init__(self, session: AsyncSession, committer: SagaCommitter) -> None:
         self._session = session
+        self._committer = committer
         self._statements = _SagaStatements(session)
+        self._failed_step = False
 
     async def create_saga(self, saga_id: UUID, name: str, context: dict[str, JsonValue]) -> None:
         """Stage a new saga execution."""
@@ -239,7 +312,14 @@ class _SagaStorageRun:
         status: SagaStepStatus,
         details: str | None = None,
     ) -> None:
-        """Stage a step transition."""
+        """Stage a step transition, remembering that the step failed.
+
+        A failed ``act`` means the step did not reach its own commit, so whatever
+        it staged is still in this transaction and must not survive. The next
+        :meth:`commit` — the engine's, taken to record the failure — discards it.
+        """
+        if action == "act" and status is SagaStepStatus.FAILED:
+            self._failed_step = True
         await self._statements.log_step(saga_id, step_name, action, status, details)
 
     async def load_saga_state(
@@ -253,34 +333,91 @@ class _SagaStorageRun:
         return await self._statements.get_step_history(saga_id)
 
     async def commit(self) -> None:
-        """Make every checkpointed change durable."""
-        await self._session.commit()
+        """Make every checkpointed change durable, in the caller's transaction.
+
+        Committing here is not a nested transaction and must not be attempted as
+        one: the engine calls this at every checkpoint, and each call ends the
+        transaction that carried the step's effect, its history entry, its
+        checkpoint and its lifecycle outbox row. The next statement opens a new
+        one — SQLAlchemy does that lazily — which is why a later step is again a
+        single transaction of its own.
+
+        The exception is the commit the engine takes after a step failed. There is
+        nothing worth keeping in that transaction — the step never committed — so
+        it is rolled back rather than committed. The saga's failure is still
+        recorded: ``Saga._record_failure`` commits it afterwards, and the status it
+        writes is the one the next reader and the recovery job act on.
+        """
+        if self._failed_step:
+            self._failed_step = False
+            await self._committer.rollback()
+            return
+        await self._committer.commit()
 
     async def rollback(self) -> None:
         """Discard the run's uncommitted changes."""
-        await self._session.rollback()
+        self._failed_step = False
+        await self._committer.rollback()
 
 
 class SqlAlchemySagaStorage(ISagaStorage):
-    """The ``ISagaStorage`` port over the project's saga tables."""
+    """The ``ISagaStorage`` port over the project's saga tables.
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    Two bindings, one class. Constructed with a session and a committer it is
+    *request-bound*: every run it opens writes through the caller's unit of work,
+    which is what makes a step and its checkpoint one transaction. Constructed with
+    only a session factory it is *unbound*: each run opens and commits its own
+    session, which is what the recovery job — which has no request and no unit of
+    work — needs.
+    """
+
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        *,
+        session: AsyncSession | None = None,
+        committer: SagaCommitter | None = None,
+    ) -> None:
         self._session_factory = session_factory
+        self._session = session
+        self._committer = committer
+
+    @property
+    def is_bound(self) -> bool:
+        """Whether the runs this storage opens write through a caller's session."""
+        return self._session is not None
 
     def create_run(self) -> contextlib.AbstractAsyncContextManager[SagaStorageRun]:
-        """Open a scoped run with checkpointed commits."""
+        """Open a scoped run with checkpointed commits.
 
-        @contextlib.asynccontextmanager
-        async def _run() -> AsyncIterator[SagaStorageRun]:
-            async with self._session_factory() as session:
-                run = _SagaStorageRun(session)
-                try:
-                    yield run
-                except BaseException:
-                    await run.rollback()
-                    raise
+        A bound storage yields a run over the caller's session and commits it
+        through the caller's committer. An unbound one opens a session of its own
+        and commits that. The run never rolls back a bound session on the way out:
+        the request scope owns that decision, and a rollback here would discard
+        work the caller has not yet had the chance to keep — a saga that failed
+        still has to record its failure and compensation, which the base class does
+        after the engine has unwound.
+        """
+        if self._session is not None and self._committer is not None:
+            return self._bound_run()
+        return self._unbound_run()
 
-        return _run()
+    @contextlib.asynccontextmanager
+    async def _bound_run(self) -> AsyncIterator[SagaStorageRun]:
+        """Yield a run over the request's session, committing the request's unit."""
+        assert self._session is not None and self._committer is not None
+        yield _SagaStorageRun(self._session, self._committer)
+
+    @contextlib.asynccontextmanager
+    async def _unbound_run(self) -> AsyncIterator[SagaStorageRun]:
+        """Yield a run over a session of its own, rolling it back on failure."""
+        async with self._session_factory() as session:
+            run = _SagaStorageRun(session, session)
+            try:
+                yield run
+            except BaseException:
+                await run.rollback()
+                raise
 
     async def create_saga(self, saga_id: UUID, name: str, context: dict[str, JsonValue]) -> None:
         """Insert a saga execution and commit it on its own."""
@@ -360,4 +497,16 @@ class SqlAlchemySagaStorage(ISagaStorage):
         """Set the recovery counter in a session of its own."""
         async with self._session_factory() as session:
             await _SagaStatements(session).set_recovery_attempts(saga_id, attempts)
+            await session.commit()
+
+    async def reset_for_retry(self, saga_id: UUID) -> None:
+        """Clear a parked saga so the recovery job runs it again.
+
+        An operator's only lever on a parked process, and both halves matter: the
+        counter is zeroed — otherwise the next attempt would park the saga again
+        immediately — and the status is cleared, because the engine refuses to run a
+        ``failed`` saga forward.
+        """
+        async with self._session_factory() as session:
+            await _SagaStatements(session).reset_for_retry(saga_id)
             await session.commit()
