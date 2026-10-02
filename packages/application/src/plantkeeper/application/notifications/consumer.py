@@ -9,6 +9,11 @@ same transaction as its idempotency claim. The onboarding saga still creates its
 ``soil_moisture_high`` one — one producer per notification type, so no type has
 two writers that could disagree.
 
+``PlantAdded``, ``PlantMoved`` and ``PlantRemoved`` are handled as well, for one
+reason: which household a reminder is addressed to is the Garden context's fact, and
+this context keeps its own copy of it — ``write_notifications.plant_refs``, maintained
+by ``plantkeeper.application.references`` — instead of reading ``write_garden``.
+
 Three rules keep the stream from becoming noise:
 
 * **A derived identifier.** The notification's id is a ``uuid5`` of the event it
@@ -20,9 +25,10 @@ Three rules keep the stream from becoming noise:
   sensor reports every ten seconds. While the household has an unread
   notification of that type for that plant, further readings add nothing: the
   reminder is already on screen. The rule is the one ``AdaptiveWateringSaga``
-  already applies to overwatering.
-* **No plant, no notification.** An event for a plant the Garden context does not
-  know is logged and dropped; there is no household to address.
+  already applies to overwatering. ``SensorOffline`` needs no such guard — its
+  producer announces a silence once, so it cannot repeat within one silence.
+* **No plant, no notification.** An event for a plant this context holds no
+  reference row for is logged and dropped; there is no household to address.
 
 A ``soil_moisture_low`` notification is deliberately not suppressed by
 ``AdaptiveWateringSaga`` pulling the watering forward: the schedule moving is a
@@ -39,19 +45,27 @@ from cqrs.dispatcher.saga import SagaDispatcher
 from pydantic import JsonValue
 
 from plantkeeper.application.ports.clock import Clock
+from plantkeeper.application.ports.plant_references import NotificationPlantRefs
 from plantkeeper.application.ports.unit_of_work import UnitOfWork
+from plantkeeper.application.references import maintain_plant_reference
 from plantkeeper.application.sagas.consumer import Consumer
 from plantkeeper.domain.base import DomainEvent
 from plantkeeper.domain.care.events import CareMissed, WateringDue, WateringRescheduled
+from plantkeeper.domain.garden.events import PlantAdded, PlantMoved, PlantRemoved
 from plantkeeper.domain.identifiers import HouseholdId, NotificationId, PlantId
 from plantkeeper.domain.notifications.notification import Notification
 from plantkeeper.domain.notifications.values import NotificationType
-from plantkeeper.domain.telemetry.events import SoilMoistureLow, TemperatureAnomaly
+from plantkeeper.domain.telemetry.events import SensorOffline, SoilMoistureLow, TemperatureAnomaly
 
 logger = logging.getLogger(__name__)
 
 NotificationTrigger = (
-    WateringDue | WateringRescheduled | CareMissed | SoilMoistureLow | TemperatureAnomaly
+    WateringDue
+    | WateringRescheduled
+    | CareMissed
+    | SoilMoistureLow
+    | TemperatureAnomaly
+    | SensorOffline
 )
 """The events a notification is made of."""
 
@@ -82,16 +96,26 @@ class NotificationConsumer(Consumer):
 
     name = "notifications"
     handled_types: ClassVar[tuple[type[DomainEvent], ...]] = (
+        PlantAdded,
+        PlantMoved,
+        PlantRemoved,
         WateringDue,
         WateringRescheduled,
         CareMissed,
         SoilMoistureLow,
         TemperatureAnomaly,
+        SensorOffline,
     )
 
-    def __init__(self, unit_of_work: UnitOfWork, clock: Clock) -> None:
+    def __init__(
+        self,
+        unit_of_work: UnitOfWork,
+        clock: Clock,
+        plant_refs: NotificationPlantRefs,
+    ) -> None:
         super().__init__(unit_of_work)
         self._clock = clock
+        self._plant_refs = plant_refs
 
     async def handle(self, event: DomainEvent, dispatcher: SagaDispatcher) -> None:
         """Route the delivery to the reminder it becomes.
@@ -99,7 +123,9 @@ class NotificationConsumer(Consumer):
         ``dispatcher`` is unused: this consumer reacts on its own and starts no
         process manager.
         """
-        if isinstance(event, WateringDue):
+        if isinstance(event, (PlantAdded, PlantMoved, PlantRemoved)):
+            await maintain_plant_reference(self._plant_refs, event, context="notifications")
+        elif isinstance(event, WateringDue):
             await self._store(
                 event,
                 NotificationType.WATERING_DUE,
@@ -146,6 +172,19 @@ class NotificationConsumer(Consumer):
                     "high_threshold": event.high_threshold,
                 },
             )
+        elif isinstance(event, SensorOffline):
+            await self._store(
+                event,
+                NotificationType.SENSOR_OFFLINE,
+                {
+                    "plant_id": str(event.plant_id),
+                    "last_seen_at": event.last_seen_at.isoformat(),
+                    # Seconds, because the payload is JSON and a duration has no
+                    # JSON spelling: a consumer that wants the magnitude should not
+                    # have to parse one.
+                    "offline_for_seconds": event.offline_for.total_seconds(),
+                },
+            )
 
     async def _store(
         self,
@@ -155,7 +194,7 @@ class NotificationConsumer(Consumer):
     ) -> None:
         """Store the notification ``event`` calls for, or explain why it does not."""
         notification_id = notification_id_for(event)
-        plant = await self.unit_of_work.plants.get(event.plant_id)
+        plant = await self._plant_refs.get(event.plant_id)
         if plant is None:
             logger.info(
                 "%s for unknown plant %s; no notification", type(event).__name__, event.plant_id
