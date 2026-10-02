@@ -15,6 +15,18 @@ consumer's handler and — for a trigger — the saga's step handlers all share,
 the ledger claim, the step writes and the outbox rows travel in one transaction
 where they must, and in the saga's own checkpointed transactions where a saga
 requires that instead.
+
+Each delivery also **binds its provenance** for the span of the scope. Everything
+the handler raises therefore reaches the outbox stamped with the delivery's
+conversation and as caused by the delivered event, and no consumer signature has
+to carry it (see :mod:`plantkeeper.application.provenance`).
+
+Each delivery runs under the platform's **failure policy**
+(:mod:`plantkeeper.application.delivery`): a broken domain rule is copied aside at
+once, anything else is retried a bounded number of times with backoff. The copy
+and the ledger claim commit together, so the partition moves on and the delivery
+is neither retried forever nor handled twice
+(``docs/adr/0011-consumer-failure-policy.md``).
 """
 
 from __future__ import annotations
@@ -29,16 +41,39 @@ from cqrs.saga.storage.protocol import ISagaStorage
 from dishka import AsyncContainer
 from faststream.kafka import KafkaBroker, KafkaMessage
 
+from plantkeeper.application.delivery import (
+    describe_failure,
+    run_with_failure_policy,
+)
+from plantkeeper.application.ports.dead_letter import DeadLetterPublisher
+from plantkeeper.application.ports.unit_of_work import UnitOfWork
+from plantkeeper.application.provenance import async_provenance_scope, request_context
 from plantkeeper.application.sagas.consumer import Consumer
 from plantkeeper.application.sagas.registry import CONSUMER_TYPES, TRIGGER_TYPES
 from plantkeeper.application.telemetry.ingest import TelemetryIngestConsumer
 from plantkeeper.domain.base import DomainEvent
 from plantkeeper.infrastructure.config import Settings
 from plantkeeper.infrastructure.di.cqrs import DishkaCQRSContainer
-from plantkeeper.infrastructure.messaging.decoding import decode_event
-from plantkeeper.infrastructure.messaging.topics import EVENT_TOPICS
+from plantkeeper.infrastructure.messaging.decoding import decode_message, read_header
+from plantkeeper.infrastructure.messaging.failures import (
+    ACK_POLICY,
+    dead_letter_for,
+    failure_policy,
+)
+from plantkeeper.infrastructure.messaging.topics import (
+    EVENT_TOPICS,
+    HEADER_RAISED_BY,
+    HEADER_TRACEPARENT,
+)
 
 logger = logging.getLogger(__name__)
+
+TELEMETRY_RAISER: Final = "service:iot-simulator"
+"""Who a raw telemetry delivery is attributed to when it names nobody.
+
+The raw topic's producer is a simulated device, so the events its readings turn
+into are attributed to the device rather than to ``system:unknown``.
+"""
 
 ConsumerSubscriber = Callable[[KafkaMessage], Awaitable[None]]
 
@@ -91,6 +126,10 @@ def register_consumers(
                 # A new consumer group replays its topic from the beginning; the
                 # ledger makes that a safe way to rebuild a consumer's state.
                 auto_offset_reset="earliest",
+                # The offset is committed once the handler returned and seeked back
+                # when it raised, so a delivery the policy could not handle really
+                # is offered again (``plantkeeper.infrastructure.messaging.failures``).
+                ack_policy=ACK_POLICY,
                 # FastStream derives an AsyncAPI channel's key from the title and
                 # falls back to the handler's function name, which every handler
                 # here shares (``handle``). Without a title, several groups on one
@@ -100,31 +139,68 @@ def register_consumers(
                 description=consumer_description(consumer_type),
             )(
                 build_consumer_handler(
-                    consumer_type, container=container, consumer_group=consumer_group
+                    consumer_type,
+                    container=container,
+                    consumer_group=consumer_group,
+                    settings=settings,
                 )
             )
 
 
 def build_consumer_handler(
-    consumer_type: type[Consumer], *, container: AsyncContainer, consumer_group: str
+    consumer_type: type[Consumer],
+    *,
+    container: AsyncContainer,
+    consumer_group: str,
+    settings: Settings,
 ) -> ConsumerSubscriber:
     """Return the FastStream handler that feeds one consumer group."""
 
     async def handle(message: KafkaMessage) -> None:
-        """Decode the delivery and consume it, if it is this consumer's."""
-        event = decode_event(message)
-        if event is None or type(event) not in consumer_type.handled_types:
+        """Decode the delivery and consume it, under the failure policy."""
+        delivered = decode_message(message)
+        if delivered is None or type(delivered.event) not in consumer_type.handled_types:
             # A topic carries every event of its context; filtering before the
             # scope is opened keeps the deliveries this group ignores from taking
             # a database session at all.
             return
-        async with container() as request_container:
+        async with async_provenance_scope(delivered.context), container() as request_container:
             consumer = await request_container.get(consumer_type)
             dispatcher = await build_saga_dispatcher(request_container)
-            if not await consumer.consume(
-                event, consumer_group=consumer_group, dispatcher=dispatcher
-            ):
-                logger.debug("event %s was already consumed by %s", event.event_id, consumer_group)
+            unit_of_work = await request_container.get(UnitOfWork)
+            publisher = await request_container.get(DeadLetterPublisher)
+
+            async def move_aside(error: Exception) -> None:
+                """Copy the delivery to the dead-letter topic and claim it.
+
+                One transaction: the claim on the delivery and the copy of it are
+                committed together, so the group never handles it twice. A copy the
+                broker refuses raises, which leaves the claim unwritten and lets the
+                transport offer the delivery again — the one outcome that must not
+                be silent.
+                """
+                copy = dead_letter_for(
+                    message, consumer_group=consumer_group, error=describe_failure(error)
+                )
+                async with unit_of_work:
+                    if not await unit_of_work.processed_events.claim(
+                        consumer_group, delivered.event.event_id
+                    ):
+                        # Already claimed: an orchestration trigger whose saga
+                        # failed commits the failure — and the claim with it — on
+                        # purpose, because that failure is the saga's to retry
+                        # within its own budget (``docs/sagas.md``).
+                        return
+                    await publisher.publish_moved_aside(copy)
+                    await unit_of_work.commit()
+
+            await run_with_failure_policy(
+                lambda: consumer.consume(
+                    delivered.event, consumer_group=consumer_group, dispatcher=dispatcher
+                ),
+                move_aside=move_aside,
+                policy=failure_policy(settings),
+            )
 
     return handle
 
@@ -156,24 +232,61 @@ def register_telemetry_ingest(
         settings.telemetry_raw_topic,
         group_id=settings.telemetry_ingest_consumer_group,
         auto_offset_reset=TELEMETRY_INGEST_OFFSET_RESET,
+        ack_policy=ACK_POLICY,
         title=channel_title(settings.telemetry_raw_topic, settings.telemetry_ingest_consumer_group),
         description="TelemetryIngestConsumer validates a raw measurement and stores it",
-    )(build_telemetry_ingest_handler(container=container))
+    )(build_telemetry_ingest_handler(container=container, settings=settings))
 
 
-def build_telemetry_ingest_handler(*, container: AsyncContainer) -> ConsumerSubscriber:
+def build_telemetry_ingest_handler(
+    *, container: AsyncContainer, settings: Settings
+) -> ConsumerSubscriber:
     """Return the FastStream handler that feeds one raw delivery to the ingress."""
 
     async def handle(message: KafkaMessage) -> None:
-        """Hand the raw body to the ingress inside its own request scope."""
+        """Hand the raw body to the ingress under the failure policy.
+
+        The raw topic carries no provenance headers — the simulator is a device,
+        not a context — so the ingress starts the conversation itself and names
+        the device as the raiser. The reading's own ``recorded_at``, not this
+        instant, is what the events carry as their occurrence.
+
+        The ingress keeps no ``processed_events`` ledger (``AGENTS.md``): it is
+        idempotent on the reading's own ``(sensor_id, recorded_at)`` key instead.
+        Its dead-letter copy therefore records no claim — there is none to
+        record — and a replay is absorbed by that same key.
+        """
         # ``StreamMessage`` assigns ``body`` in ``__init__`` without annotating it,
         # so the declared type is unknown; a Kafka delivery's body is the bytes
         # the producer sent.
         payload = cast("bytes", message.body)
-        async with container() as request_container:
+        context = request_context(
+            raised_by=read_header(message, HEADER_RAISED_BY) or TELEMETRY_RAISER,
+            traceparent=read_header(message, HEADER_TRACEPARENT),
+        )
+        async with async_provenance_scope(context), container() as request_container:
             consumer = await request_container.get(TelemetryIngestConsumer)
-            stored = await consumer.ingest(payload)
+            publisher = await request_container.get(DeadLetterPublisher)
+
+            async def move_aside(error: Exception) -> None:
+                """Copy the raw delivery aside for an operator to replay."""
+                await publisher.publish_moved_aside(
+                    dead_letter_for(
+                        message,
+                        consumer_group=settings.telemetry_ingest_consumer_group,
+                        error=describe_failure(error),
+                    )
+                )
+
+            stored = await run_with_failure_policy(
+                lambda: consumer.ingest(payload),
+                move_aside=move_aside,
+                policy=failure_policy(settings),
+            )
             if not stored:
+                # The ingress answered "nothing to store": the reading was already
+                # there, or it was dropped (unparseable, or from a sensor nobody
+                # registered — both already logged with their own reason).
                 logger.debug("telemetry delivery was dropped rather than stored")
 
     return handle

@@ -4,19 +4,26 @@
 mistakes are easy and silent: subscribing a consumer twice (it would receive every
 event twice) or deriving the wrong group id (the ledger and the offsets would
 belong to the wrong consumer). A fake broker records the calls so both are pinned.
+
+The acknowledgement policy is pinned here too: it is the half of the failure
+policy FastStream owns, and the default would commit a failed delivery's offset
+from aiokafka's own timer — a delivery that is neither handled nor offered again.
 """
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import cast
 
 from dishka import AsyncContainer
 from faststream.kafka import KafkaBroker, KafkaMessage
+from faststream.middlewares import AckPolicy
 
 from plantkeeper.application.sagas.registry import WORKER_CONSUMER_TYPES
 from plantkeeper.domain.garden.events import PlantAdded, PlantMoved
 from plantkeeper.infrastructure.config import Settings
+from plantkeeper.infrastructure.messaging.failures import ACK_POLICY
 from plantkeeper.infrastructure.messaging.topics import EVENT_TOPICS, TELEMETRY_RAW
 from plantkeeper.workers.consumers import (
     TELEMETRY_INGEST_OFFSET_RESET,
@@ -28,11 +35,23 @@ from plantkeeper.workers.consumers import (
 Subscriber = Callable[[KafkaMessage], Awaitable[None]]
 
 
+@dataclass(frozen=True)
+class Route:
+    """One subscription the worker registered."""
+
+    topic: str
+    group_id: str
+    title: str
+    auto_offset_reset: str
+    ack_policy: AckPolicy
+    handler: Subscriber
+
+
 class FakeBroker:
-    """Records ``(topic, group_id, title, auto_offset_reset, handler)`` per subscription."""
+    """Records one :class:`Route` per subscription."""
 
     def __init__(self) -> None:
-        self.routes: list[tuple[str, str, str, str, Subscriber]] = []
+        self.routes: list[Route] = []
 
     def subscriber(
         self,
@@ -42,12 +61,15 @@ class FakeBroker:
         auto_offset_reset: str,
         title: str,
         description: str,
+        ack_policy: AckPolicy,
     ) -> Callable[[Subscriber], Subscriber]:
         """Stand in for FastStream's decorator-returning ``subscriber``."""
         del description  # Only the title keys the generated channel.
 
         def decorator(handler: Subscriber) -> Subscriber:
-            self.routes.append((topic, group_id, title, auto_offset_reset, handler))
+            self.routes.append(
+                Route(topic, group_id, title, auto_offset_reset, ack_policy, handler)
+            )
             return handler
 
         return decorator
@@ -67,7 +89,7 @@ def test_every_consumer_is_subscribed_to_each_of_its_topics_once() -> None:
         settings=Settings(worker_consumer_group_prefix="test-worker"),
     )
 
-    subscribed = {(topic, group_id) for topic, group_id, _, _, _ in broker.routes}
+    subscribed = {(route.topic, route.group_id) for route in broker.routes}
     expected = {
         (EVENT_TOPICS[event_type], f"test-worker-{consumer_type.name}")
         for consumer_type in WORKER_CONSUMER_TYPES
@@ -91,10 +113,10 @@ def test_every_subscription_has_a_unique_asyncapi_title() -> None:
         settings=Settings(worker_consumer_group_prefix="test-worker"),
     )
 
-    titles = [title for _, _, title, _, _ in broker.routes]
+    titles = [route.title for route in broker.routes]
     assert len(titles) == len(set(titles))
-    for topic, group_id, title, _, _ in broker.routes:
-        assert title == f"{topic} to {group_id}"
+    for route in broker.routes:
+        assert route.title == f"{route.topic} to {route.group_id}"
 
 
 def test_every_subscription_replays_from_the_beginning() -> None:
@@ -107,7 +129,29 @@ def test_every_subscription_replays_from_the_beginning() -> None:
         settings=Settings(worker_consumer_group_prefix="test-worker"),
     )
 
-    assert {auto_offset_reset for _, _, _, auto_offset_reset, _ in broker.routes} == {"earliest"}
+    assert {route.auto_offset_reset for route in broker.routes} == {"earliest"}
+
+
+def test_every_subscription_redelivers_a_failed_delivery() -> None:
+    """The retry budget is only real if the transport offers the delivery again.
+
+    FastStream's default acknowledgement policy commits the offset from aiokafka's
+    own timer, so a handler that raised leaves a delivery that was neither handled
+    nor redelivered — and a dead-letter copy that could never be retried.
+    """
+    broker = FakeBroker()
+
+    register_consumers(
+        cast("KafkaBroker", broker),
+        container=cast("AsyncContainer", None),
+        settings=Settings(worker_consumer_group_prefix="test-worker"),
+    )
+    register_telemetry_ingest(
+        cast("KafkaBroker", broker), container=cast("AsyncContainer", None), settings=Settings()
+    )
+
+    assert {route.ack_policy for route in broker.routes} == {AckPolicy.NACK_ON_ERROR}
+    assert ACK_POLICY is AckPolicy.NACK_ON_ERROR
 
 
 def test_the_telemetry_ingress_is_subscribed_to_the_raw_topic_alone() -> None:
@@ -123,8 +167,8 @@ def test_the_telemetry_ingress_is_subscribed_to_the_raw_topic_alone() -> None:
     )
 
     assert len(broker.routes) == 1
-    topic, group_id, _title, _auto_offset_reset, _handler = broker.routes[0]
-    assert (topic, group_id) == (TELEMETRY_RAW, "test-telemetry-ingest")
+    route = broker.routes[0]
+    assert (route.topic, route.group_id) == (TELEMETRY_RAW, "test-telemetry-ingest")
 
 
 def test_the_telemetry_ingress_starts_at_the_live_edge() -> None:
@@ -138,7 +182,7 @@ def test_the_telemetry_ingress_starts_at_the_live_edge() -> None:
     )
 
     assert TELEMETRY_INGEST_OFFSET_RESET == "latest"
-    assert broker.routes[0][3] == "latest"
+    assert broker.routes[0].auto_offset_reset == "latest"
 
 
 def test_the_raw_topic_is_not_in_the_event_catalogue() -> None:
