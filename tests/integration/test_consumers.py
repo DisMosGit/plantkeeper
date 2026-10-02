@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from plantkeeper.application.journal.consumer import JournalEntryConsumer
+from plantkeeper.application.ports.plant_references import PlantReference
 from plantkeeper.application.ports.sagas import MissedCareState, MissedCareWindow
 from plantkeeper.application.sagas.adaptive_watering import AdaptiveWateringSaga
 from plantkeeper.application.sagas.missed_care import GRACE_PERIOD, MissedCareSaga
@@ -35,9 +36,13 @@ from plantkeeper.domain.telemetry.events import SoilMoistureHigh, TelemetryRecei
 from plantkeeper.domain.telemetry.sensor import MOISTURE_LOW_THRESHOLD
 from plantkeeper.domain.values import LightLevel, Location, Moisture, Temperature, WateringInterval
 from plantkeeper.infrastructure.persistence.models.notifications import NotificationModel
+from plantkeeper.infrastructure.persistence.models.plant_refs import JournalPlantReferenceModel
 from plantkeeper.infrastructure.persistence.models.shared import OutboxModel
 from plantkeeper.infrastructure.persistence.repositories.care import (
     SqlAlchemyCareScheduleRepository,
+)
+from plantkeeper.infrastructure.persistence.repositories.plant_references import (
+    SqlAlchemyPlantReferenceRepository,
 )
 from plantkeeper.infrastructure.persistence.repositories.sagas import (
     SqlAlchemyMissedCareWindowRepository,
@@ -413,16 +418,53 @@ def a_watering_completed(plant_id: PlantId) -> WateringCompleted:
     )
 
 
+def journal_consumer(session: AsyncSession) -> JournalEntryConsumer:
+    """The journal's consumer, wired with the journal's own reference table."""
+    return JournalEntryConsumer(
+        SqlAlchemyUnitOfWork(session),
+        FakeClock(NOW),
+        SqlAlchemyPlantReferenceRepository(session, JournalPlantReferenceModel),
+    )
+
+
+async def seed_journal_reference(
+    session_factory: async_sessionmaker[AsyncSession],
+    household_id: HouseholdId,
+    plant_id: PlantId,
+) -> None:
+    """Record the plant in the journal's own reference table.
+
+    In production ``PlantAdded`` maintains this row under the journal's consumer
+    group, and ``tests/integration/test_plant_references.py`` covers that path; here
+    it is seeded directly so a test about journalling does not have to consume a
+    garden event first. The plant still exists in ``write_garden`` because these
+    tests seed it there — the consumer no longer reads it.
+    """
+    async with session_factory() as session:
+        await SqlAlchemyPlantReferenceRepository(session, JournalPlantReferenceModel).upsert(
+            PlantReference(
+                plant_id=plant_id,
+                household_id=household_id,
+                name="Fern",
+                location="Shelf",
+                seen_at=NOW,
+            )
+        )
+        await session.commit()
+
+
 async def test_a_completed_watering_is_journalled_once(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _, plant_id = await seed_plant_with_schedule(session_factory, next_watering_at=NOW + WEEK)
+    household_id, plant_id = await seed_plant_with_schedule(
+        session_factory, next_watering_at=NOW + WEEK
+    )
+    await seed_journal_reference(session_factory, household_id, plant_id)
     storage = SqlAlchemySagaStorage(session_factory)
     event = a_watering_completed(plant_id)
 
     async with session_factory() as session:
-        uow = SqlAlchemyUnitOfWork(session)
-        consumer = JournalEntryConsumer(uow, FakeClock(NOW))
+        consumer = journal_consumer(session)
         assert await consumer.consume(event, consumer_group=GROUP, dispatcher=a_dispatcher(storage))
         # The ledger stops a redelivery of the same event.
         assert not await consumer.consume(
@@ -445,18 +487,19 @@ async def test_a_rebuilt_consumer_group_does_not_journal_the_watering_again(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     """A reset offset plus a lost ledger is the case the derived entry id covers."""
-    _, plant_id = await seed_plant_with_schedule(session_factory, next_watering_at=NOW + WEEK)
+    household_id, plant_id = await seed_plant_with_schedule(
+        session_factory, next_watering_at=NOW + WEEK
+    )
+    await seed_journal_reference(session_factory, household_id, plant_id)
     storage = SqlAlchemySagaStorage(session_factory)
     event = a_watering_completed(plant_id)
 
     async with session_factory() as session:
-        uow = SqlAlchemyUnitOfWork(session)
-        consumer = JournalEntryConsumer(uow, FakeClock(NOW))
+        consumer = journal_consumer(session)
         assert await consumer.consume(event, consumer_group=GROUP, dispatcher=a_dispatcher(storage))
 
     async with session_factory() as session:
-        uow = SqlAlchemyUnitOfWork(session)
-        rebuilt = JournalEntryConsumer(uow, FakeClock(NOW))
+        rebuilt = journal_consumer(session)
         assert await rebuilt.consume(
             event, consumer_group=f"{GROUP}-rebuilt", dispatcher=a_dispatcher(storage)
         )
@@ -476,8 +519,7 @@ async def test_a_watering_for_an_unknown_plant_is_not_journalled(
     storage = SqlAlchemySagaStorage(session_factory)
 
     async with session_factory() as session:
-        uow = SqlAlchemyUnitOfWork(session)
-        consumer = JournalEntryConsumer(uow, FakeClock(NOW))
+        consumer = journal_consumer(session)
         assert await consumer.consume(
             a_watering_completed(PlantId.new()),
             consumer_group=GROUP,
