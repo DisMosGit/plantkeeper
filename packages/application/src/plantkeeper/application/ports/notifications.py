@@ -1,18 +1,22 @@
-"""Notifications port: the channel a long poll waits on.
+"""Notifications ports: the household signal, and the read behind a stream.
 
-Notifications are delivered by HTTP long polling (Phase 8): the client asks for
-pending notifications and, when there are none, waits on a per-household
-*presence channel* until the write side says something happened. The channel
-carries a **nudge**, never the notification itself — a household identifier
-published on ``household:<id>``. The long poll answers a nudge by reading its own
-database again, so a lost or duplicated nudge costs latency, never a
+Notifications are delivered to clients connected to the API, by a server-sent
+event stream or by the request-and-wait endpoint kept as its fallback. Both forms
+are woken by the same per-household *presence channel*: the write side publishes a
+**nudge**, never the notification itself — a household identifier published on
+``household:<id>`` — and the receiver answers it by reading its own database. A
+lost or duplicated nudge therefore costs latency or a redundant read, never a
 notification, and the row in ``write_notifications.notifications`` stays the one
 source of truth.
 
 :class:`NotificationChannel` is what both sides see: the API subscribes, and the
 worker's ``NotificationPusher`` publishes once a ``NotificationCreated`` event
-has been committed and published to Kafka. The Valkey adapter and the exact wire
-format live in the infrastructure layer, and nothing here imports it.
+has been committed and published to Kafka. :class:`PendingNotificationReader` is
+the read behind the stream: every call opens storage and releases it again, so a
+stream that is idle holds a subscription and no database session.
+
+The Valkey adapter, the SQLAlchemy reader and the exact wire formats live in the
+infrastructure layer, and nothing here imports it.
 """
 
 from __future__ import annotations
@@ -20,7 +24,8 @@ from __future__ import annotations
 from contextlib import AbstractAsyncContextManager
 from typing import Protocol, runtime_checkable
 
-from plantkeeper.domain.identifiers import HouseholdId
+from plantkeeper.application.views import NotificationView
+from plantkeeper.domain.identifiers import HouseholdId, NotificationId
 
 
 class NotificationChannelError(Exception):
@@ -64,5 +69,27 @@ class NotificationChannel(Protocol):
 
         Raises :class:`NotificationChannelError` when the subscription cannot be
         opened.
+        """
+        ...
+
+
+@runtime_checkable
+class PendingNotificationReader(Protocol):
+    """The unacknowledged notifications a stream has not delivered yet.
+
+    One call is one complete read on storage of its own: the stream calls this
+    again after every wake-up and holds nothing in between, which is what lets an
+    idle stream hold a channel subscription and no database session.
+    """
+
+    async def pending_since(
+        self, household_id: HouseholdId, *, since: NotificationId | None
+    ) -> list[NotificationView]:
+        """Return the household's unacknowledged notifications after ``since``.
+
+        ``since`` is the last notification the caller delivered; identifiers are
+        UUIDv7, so "greater than the cursor" and "created after the cursor" are
+        the same question, and ``None`` means "from the beginning". Oldest first,
+        and shaped exactly like the request-and-wait answer.
         """
         ...

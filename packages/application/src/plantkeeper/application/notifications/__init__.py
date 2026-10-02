@@ -1,1 +1,1 @@
-"""Notification producers and the presence channel (Phase 8)."""
+"""Notification producers, the presence channel and the client-facing stream."""
