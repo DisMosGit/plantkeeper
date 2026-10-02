@@ -71,8 +71,9 @@ ourselves.
   providers (the worker builds the Trefle client and the relay; the API must not),
   which is a lifetime and scoping decision the library cannot make for us.
 
-**Added, because the library stops short of it.** The four saga lifecycle events
-(`SagaStarted`, `SagaCompleted`, `SagaFailed`, `SagaCompensated`) are ours: the
+**Added, because the library stops short of it.** The saga lifecycle events
+(`SagaStarted`, `SagaCompleted`, `SagaFailed`, `SagaCompensated`, joined later by
+`SagaRetrying` and `SagaParked`) are ours: the
 engine records a status, but nothing publishes it, and an operator who cannot see a
 saga in the event stream can only inspect a table. The events travel to
 `saga.events` through the outbox like every other fact.

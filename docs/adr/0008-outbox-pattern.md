@@ -17,9 +17,11 @@ Kafka produce on the write side, with `attempts`, a dead-letter topic and an
 idempotency-key table for HTTP replays. It closes with the observation that
 at-least-once delivery is "a permanent obligation on every future consumer".
 
-By Phase 10 that obligation has been honoured nine times — six write-side consumers
-in `apps/workers`, five projections in `apps/admin` — across two processes, two
-databases and two ledgers. The pattern is therefore no longer one table and one loop:
+By the time every phase was implemented that obligation is honoured fourteen times —
+eight ledger-keeping write-side consumers in `apps/workers` and six projections in
+`apps/admin` — across two processes, two databases and two ledgers, with the telemetry
+ingress as the one documented exception that keeps no ledger. The pattern is therefore
+no longer one table and one loop:
 it is the whole delivery story, and a reader who only sees ADR 0003 gets the first
 half. This ADR records the second.
 
@@ -103,9 +105,14 @@ saga's state to be rebuilt from its topic. The telemetry ingress is the one exce
   `apps/workers` (the layer contract). The *pattern* is shared — decoding
   (`plantkeeper.infrastructure.messaging.decoding`), the claim protocol and the
   earliest-offset policy — while each side keeps its own table.
-- **Follow-up:** `SensorOffline` still has no producer (it needs a silence timer, not
-  a delivery guarantee); `write_shared.idempotency_keys` still grows without expiry.
-  Both are listed in `docs/events.md` and `docs/cqrs.md` as known limits.
+- **Amended (2026-10-02).** The follow-up above is half resolved. `SensorOffline` no
+  longer "has no producer": a sensor's `last_seen_at` is persisted with each reading and
+  the worker's `SensorSilenceJob` calls `Sensor.mark_offline`, publishing the event at
+  most once per silence ([`docs/telemetry.md`](../telemetry.md)); it reaches the
+  notification consumer and the telemetry read side like any other telemetry fact.
+  `write_shared.idempotency_keys` still grows without expiry, and the two ledgers grow
+  with it — pruning them remains a runbook concern, as the first consequence above says.
+  Only that half is still a documented limit.
 
 ## References
 

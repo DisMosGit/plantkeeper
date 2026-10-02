@@ -102,15 +102,37 @@ saga because the step log exists. Saga tables are under Alembic like every other
 write table, and a failed saga is visible both in `saga_state` and on Kafka.
 
 **Harder.** There is one more adapter to maintain, and it has to implement the
-whole `ISagaStorage` protocol including the recovery queries. Saga state is
-committed in a session of its own, so a crash between a step's commit and the
-log's checkpoint can leave the two disagreeing; the recovery job resolves that by
-re-running from the log, and the log is written before the next step starts.
-Compensating a step that published an event (`PlantOnboarded`, `SagaCompleted`)
-cannot unpublish it: the sequence is ordered so the publish is last, and a
-compensated onboarding may leave a stale read-side row until the read model is
-rebuilt. Restoring a species during compensation is itself a catalogue change, so
-it records a `SpeciesUpdated` rather than rewriting history silently.
+whole `ISagaStorage` protocol including the recovery queries. Compensating a step
+that published an event (`PlantOnboarded`, `SagaCompleted`) cannot unpublish it:
+the sequence is ordered so the publish is last, and a compensated onboarding may
+leave a stale read-side row until the read model is rebuilt. Restoring a species
+during compensation is itself a catalogue change, so it records a
+`SpeciesUpdated` rather than rewriting history silently.
+
+**Amended (2026-10-02).** This ADR originally recorded that saga state was
+"committed in a session of its own, so a crash between a step's commit and the
+log's checkpoint can leave the two disagreeing". That is no longer true and was
+never necessary: the saga tables and the outbox share one Postgres, so the dual
+write was self-inflicted. `SqlAlchemySagaStorage` now takes the *request's* session
+and commits through its unit of work when it is resolved inside a request scope,
+which puts a step's effect, its `saga_log` entry, its `saga_state` checkpoint and
+its lifecycle outbox row in one transaction. Per-step commits stay — compensation
+needs durable steps — so only the checkpoint moved into the step's transaction.
+`SagaRecoveryJob` still uses the unbound storage, because a background tick has no
+request to commit into. The failure path is unchanged in intent: a recorded failure
+is still committed (with the delivery's claim) and left for an operator. See
+[ADR 0012](0012-saga-command-dispatch.md) for the follow-on decision about how a
+step changes a context the saga does not own.
+
+**Amended (2026-10-02), later the same day.** The sentence above — "a recorded failure is
+still committed (with the delivery's claim) and left for an operator" — described the
+state after the checkpoint fix and before the retry budget landed, and it is no longer
+the rule. A recorded failure is now retried from its step history within a bounded budget
+(`SAGA_RECOVERY_MAX_ATTEMPTS`), and only a process that exhausts the budget is parked;
+`SagaRecoveryJob` drives both. An operator resets a parked process with
+`SqlAlchemySagaStorage.reset_for_retry`, and it runs again from its recorded history. The
+`SagaRetrying` and `SagaParked` lifecycle events report the two states, which is why the
+catalogue has six of them and not the four named above.
 
 **Follow-ups.** Phase 5 added the telemetry consumer that produces
 `TelemetryReceived`, which is what makes `AdaptiveWateringSaga` run for real.

@@ -48,6 +48,18 @@ tools do not overlap. The migration creates the schema itself because
 `docker/postgres/init` only runs on a fresh volume and the test suite starts an
 empty container with no init script at all.
 
+**Amended (2026-10-02).** This ADR originally recorded that the schema was "one
+more Postgres schema in the same database" as `write_*`. The read side now runs on a
+Postgres instance of its own (`docker-compose.yml`'s `postgres-read`, port 5433):
+a projection rebuild and the admin's queries cannot compete with the write path, and
+a truncate-and-replay of a read model cannot reach a write table. The ownership
+decision is unchanged — Django still owns the schema and `0001_read_models` still
+creates it — only the instance it is created in moved, and the API's read-only
+engine opens that same instance for the client list/report queries. Both sides are
+addressed by URL settings, so pointing `READ_POSTGRES_*` back at the write instance
+collapses the split again; the commands, the verification and that rollback are in
+[`docs/runbooks/local-topology.md`](../runbooks/local-topology.md).
+
 **One writer per column, and the ledger commits with the write.** Every read
 column has exactly one owning projection. Where that is not enough — a
 `plants` row is filled by Garden, Care and Catalog, whose events travel on three
@@ -102,11 +114,18 @@ next replay.
   the write schema, and it would break the moment the two are separated.
 - **Constrained:** every new projection must be added to `ALL_PROJECTIONS` and
   covered by the catalogue contract test, or its events are silently ignored.
-- **Follow-up:** nothing publishes `JournalEntryAdded` or `SpeciesUpdated` before
-  Phases 6 and 9, so `plants.species_name` stays empty until the Catalog publishes
-  a species. That is a gap in the *producers*, and the read side is ready for them.
-- **Follow-up:** telemetry has no read model yet (Phase 5); the catalogue contract
-  test names `TelemetryReceived` and its four siblings as unprojected on purpose.
+- **Follow-up:** the producers this ADR was waiting on now exist.
+  `JournalEntryAdded` and `SpeciesUpdated` are published, so `plants.species_name` is
+  filled once the species has been projected. That was a gap in the *producers*; the
+  read side was already ready for them.
+- **Amended (2026-10-02).** This ADR originally recorded that "telemetry has no read
+  model yet" and that the catalogue contract test named `TelemetryReceived` and its
+  four siblings as unprojected on purpose. Telemetry is no longer a gap: the
+  `TelemetryRollupProjection` consumes every telemetry event under a consumer group of
+  its own into `read_telemetry` — a schema of its own, kept out of the domain read
+  models so their shape and rebuild story are unaffected. The unprojected list is
+  correspondingly shorter and names neither the telemetry events nor `SensorOffline`;
+  [`docs/telemetry.md`](../telemetry.md) holds the rollup shape and the rebuild.
 
 ## References
 

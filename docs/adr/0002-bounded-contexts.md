@@ -57,6 +57,21 @@ Identifiers (`PlantId`, `SensorId`, …) are part of the shared kernel precisely
 that contexts can refer to each other's aggregates in their own events without
 importing the owning context's code.
 
+**Amended (2026-10-02).** Rule 2 as written is narrower than it reads, and rule 3's
+`read_analytics` is no longer the only read schema. "Kafka events are the only channel"
+holds *between processes*, which is what keeps the write path independent of the broker;
+inside the worker process an orchestration saga coordinates through the shared
+application layer. A step that would change a context the saga does not own records a
+command in the same transaction as the saga's own progress, and the worker's
+`CommandDispatcher` executes it through the owning context's own handlers
+([ADR 0012](0012-saga-command-dispatch.md)); a step that needs another context's data
+during the step reads it through the port that context defines, whose adapter uses that
+context's own repository — so the table is still only read by the context that owns it,
+and a process manager asks rather than writes. Neither is a synchronous call from one
+context's code into another's, and rule 1 is unchanged. Rule 3's `read_analytics` is now
+one of two read schemas — telemetry gained `read_telemetry` — and both live on a
+Postgres instance of their own ([ADR 0004](0004-read-side-projections.md)).
+
 ## Consequences
 
 - **Easier:** each context can change its internal model, its storage schema and its

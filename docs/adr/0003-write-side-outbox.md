@@ -69,6 +69,20 @@ itself fails the row is counted as a failed attempt instead, so a message is
 never dropped silently. The poll delay backs off exponentially while publishing
 keeps failing, and it waits on the stop event so shutdown is immediate.
 
+**Amended (2026-10-02).** Two things this ADR decided have moved on, both from the audit
+remediation. *The table* gained provenance: `correlation_id`, `causation_id`, `raised_by`,
+`schema_version` and `traceparent` are frozen beside the topic and the partition key
+(migration `0006`) so that the relay emits what the write side decided and never
+re-derives it ([ADR 0010](0010-message-provenance.md)), and `claimed_at` is the relay's
+lease. *The relay* no longer assumes a single instance whose `mark_published` merely
+happens to be idempotent: it claims the rows it takes — `FOR UPDATE SKIP LOCKED` plus a
+lease, in `SqlAlchemyOutboxRepository.fetch_unpublished` — and the claim hands back only
+publishable rows, meaning nothing older shares their partition key and still needs
+publishing. Two relays therefore neither publish the same row twice nor let a later event
+of a key overtake an earlier one, which supersedes the consequence above that "two relays
+would duplicate messages"; the lease is what makes a relay that dies mid-batch
+recoverable without an operator.
+
 **Idempotency.** `write_shared.idempotency_keys(key PRIMARY KEY, request_hash,
 status_code, response, created_at)` stores the response of a create command. The
 winning insert makes a concurrent duplicate fail on the primary key; the loser
