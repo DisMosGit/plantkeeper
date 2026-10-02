@@ -5,10 +5,11 @@ This one covers the other half: the read-side process — the very Starlette
 application ``make admin`` serves, with its real Kafka subscriptions — consumes
 that event, projects it into ``read_analytics``, and Django Admin shows it.
 
-The admin application is started inside the test rather than left running in the
-background: the same code path, without a loop whose failures would look like
-flakes. Each test uses consumer groups of its own, so a previous test's offsets
-cannot hide the events this one projects.
+The admin application runs as a fixture, on consumer groups of the test's own,
+rather than in a background process: the same code path, without a loop whose
+failures would look like flakes. Its projection groups start only after the suite
+has emptied the event topics, so a previous test's events can neither satisfy nor
+disturb what this one projects.
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from typing import cast
 
 import pytest
@@ -101,10 +101,19 @@ async def republish(row: OutboxModel, *, bootstrap_servers: str) -> None:
         await producer.stop()
 
 
-@asynccontextmanager
-async def running_admin(settings: Settings) -> AsyncIterator[Starlette]:
-    """Run the read-side application, Kafka subscriptions and all."""
-    application = create_admin_application(settings=settings)
+@pytest.fixture
+async def running_admin(
+    read_side_settings: Settings, isolated_broker: None
+) -> AsyncIterator[Starlette]:
+    """Run the read-side application, Kafka subscriptions and all.
+
+    A fixture rather than a context manager inside each test, and a dependency of
+    ``isolated_broker``: the application opens the projection consumer groups as
+    it starts, so it is the start that has to happen *after* the topics were
+    emptied. Groups are the test's own (``read_side_settings`` mints a fresh
+    prefix), which no longer has to carry the isolation on its own.
+    """
+    application = create_admin_application(settings=read_side_settings)
     async with application.router.lifespan_context(application):
         yield application
 
@@ -155,14 +164,14 @@ async def test_a_created_plant_is_projected_into_the_read_model(
     database: str,
     read_side_settings: Settings,
     read_side_database: str,
+    running_admin: Starlette,
 ) -> None:
     household_id = await create_household(api_client)
 
-    async with running_admin(read_side_settings):
-        plant_id = await create_plant(api_client, household_id)
-        await publish_the_outbox(read_side_settings)
+    plant_id = await create_plant(api_client, household_id)
+    await publish_the_outbox(read_side_settings)
 
-        row = await wait_for_plant(plant_id)
+    row = await wait_for_plant(plant_id)
 
     assert row.household_id == uuid.UUID(household_id)
     assert row.name == "Fern"
@@ -190,23 +199,23 @@ async def test_a_redelivered_event_is_projected_once(
     kafka_bootstrap_servers: str,
     read_side_settings: Settings,
     read_side_database: str,
+    running_admin: Starlette,
 ) -> None:
     """At-least-once delivery is the contract; projecting once is the answer."""
     household_id = await create_household(api_client)
 
-    async with running_admin(read_side_settings):
-        plant_id = await create_plant(api_client, household_id)
-        await publish_the_outbox(read_side_settings)
-        row = await wait_for_plant(plant_id)
-        assert row.name == "Fern"
+    plant_id = await create_plant(api_client, household_id)
+    await publish_the_outbox(read_side_settings)
+    row = await wait_for_plant(plant_id)
+    assert row.name == "Fern"
 
-        pending = await outbox_rows(database)
-        added = next(row for row in pending if row.event_name == "PlantAdded")
+    pending = await outbox_rows(database)
+    added = next(row for row in pending if row.event_name == "PlantAdded")
 
-        await republish(added, bootstrap_servers=kafka_bootstrap_servers)
-        # The duplicate is a no-op in the ledger, so there is nothing to poll for:
-        # the delivery is given time to arrive, and the counts must not move.
-        await asyncio.sleep(DUPLICATE_SETTLE_SECONDS)
+    await republish(added, bootstrap_servers=kafka_bootstrap_servers)
+    # The duplicate is a no-op in the ledger, so there is nothing to poll for:
+    # the delivery is given time to arrive, and the counts must not move.
+    await asyncio.sleep(DUPLICATE_SETTLE_SECONDS)
 
     assert await PlantReadModel.objects.filter(plant_id=uuid.UUID(plant_id)).acount() == 1
     assert await ProcessedEvent.objects.filter(event_id=added.event_id).acount() == 1
@@ -216,22 +225,22 @@ async def test_django_admin_shows_the_projected_plant_without_a_login_form(
     api_client: AsyncClient,
     read_side_settings: Settings,
     read_side_database: str,
+    running_admin: Starlette,
 ) -> None:
     household_id = await create_household(api_client)
 
-    async with running_admin(read_side_settings) as admin:
-        plant_id = await create_plant(api_client, household_id, name="Monstera")
-        await publish_the_outbox(read_side_settings)
-        await wait_for_plant(plant_id)
+    plant_id = await create_plant(api_client, household_id, name="Monstera")
+    await publish_the_outbox(read_side_settings)
+    await wait_for_plant(plant_id)
 
-        transport = ASGITransport(app=admin)
-        async with AsyncClient(transport=transport, base_url="http://testserver") as browser:
-            login = await browser.get("/admin/login/")
+    transport = ASGITransport(app=running_admin)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as browser:
+        login = await browser.get("/admin/login/")
 
-            index = await browser.get("/admin/")
-            changelist = await browser.get("/admin/read_models/plantreadmodel/")
-            schedule = await browser.get("/admin/read_models/carereadmodel/")
-            journal = await browser.get("/admin/read_models/journalreadmodel/")
+        index = await browser.get("/admin/")
+        changelist = await browser.get("/admin/read_models/plantreadmodel/")
+        schedule = await browser.get("/admin/read_models/carereadmodel/")
+        journal = await browser.get("/admin/read_models/journalreadmodel/")
 
     # The middleware selected the local user before the view ran, so the login
     # form is never served: Django redirects an authenticated staff user away.
@@ -253,20 +262,20 @@ async def test_the_journal_inline_renders_on_the_plant_page(
     api_client: AsyncClient,
     read_side_settings: Settings,
     read_side_database: str,
+    running_admin: Starlette,
 ) -> None:
     """The plant page carries the journal the read model promises."""
     household_id = await create_household(api_client)
 
-    async with running_admin(read_side_settings) as admin:
-        plant_id = await create_plant(api_client, household_id, name="Fern")
-        await publish_the_outbox(read_side_settings)
-        await wait_for_plant(plant_id)
+    plant_id = await create_plant(api_client, household_id, name="Fern")
+    await publish_the_outbox(read_side_settings)
+    await wait_for_plant(plant_id)
 
-        transport = ASGITransport(app=admin)
-        async with AsyncClient(transport=transport, base_url="http://testserver") as browser:
-            detail: Response = await browser.get(
-                f"/admin/read_models/plantreadmodel/{plant_id}/change/"
-            )
+    transport = ASGITransport(app=running_admin)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as browser:
+        detail: Response = await browser.get(
+            f"/admin/read_models/plantreadmodel/{plant_id}/change/"
+        )
 
     assert detail.status_code == 200, detail.text
     # This plant was never watered, so the inline is present with its headings and no

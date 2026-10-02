@@ -14,13 +14,16 @@ provider is lazy — but the environment always names both instances, exactly as
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from urllib.parse import urlparse
 from uuid import uuid4
 
 import django
 import grpc
 import pytest
+from aiokafka import AIOKafkaConsumer, TopicPartition
+from aiokafka.admin import AIOKafkaAdminClient
+from aiokafka.admin.records_to_delete import RecordsToDelete
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -28,7 +31,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from plantkeeper.api.grpc.server import run_grpc_server
 from plantkeeper.api.main import create_app
 from plantkeeper.infrastructure.config import Settings
-from plantkeeper.infrastructure.messaging.topics import event_type_for
+from plantkeeper.infrastructure.messaging.topics import DLQ_TOPIC, EVENT_TOPICS, event_type_for
 from plantkeeper.infrastructure.persistence.models.shared import OutboxModel
 
 # Django is configured at import time, before pytest imports the test modules: a
@@ -306,3 +309,88 @@ async def grpc_channel(grpc_port: int) -> AsyncIterator[grpc.aio.Channel]:
         yield channel
     finally:
         await channel.close()
+
+
+# -----------------------------------------------------------------------------
+# The broker between tests
+# -----------------------------------------------------------------------------
+
+
+def topics_the_platform_publishes_events_on(settings: Settings) -> tuple[str, ...]:
+    """Every topic an end-to-end test has to be isolated from.
+
+    Derived rather than listed: the values of ``EVENT_TOPICS`` cover the whole
+    event catalogue, so a topic added to it is isolated without an edit here, and
+    the two topics that are not in the catalogue — the simulator's raw feed and
+    the dead-letter topic — are named by their setting and their constant rather
+    than copied as literals.
+    """
+    return tuple(dict.fromkeys((*EVENT_TOPICS.values(), settings.telemetry_raw_topic, DLQ_TOPIC)))
+
+
+async def delete_records_on(bootstrap_servers: str, topics: Sequence[str]) -> None:
+    """Delete the records already on ``topics``, up to each partition's high-water mark.
+
+    Deleting *up to the high-water mark*, rather than to some offset chosen in
+    advance, leaves the log's start where the next record will be written: the
+    topics stay usable, and the ``earliest`` a fresh consumer group resets to is
+    the deletion point — what the test itself publishes, and nothing a previous
+    test left behind.
+
+    A topic nothing has published to yet does not exist (a broker creates a topic
+    on its first produce, not on its first mention) and is already empty, so it is
+    skipped instead of being created here.
+    """
+    admin = AIOKafkaAdminClient(bootstrap_servers=bootstrap_servers)
+    consumer = AIOKafkaConsumer(bootstrap_servers=bootstrap_servers)
+    await admin.start()
+    await consumer.start()
+    try:
+        known = set(await admin.list_topics())
+        existing = [topic for topic in topics if topic in known]
+        if not existing:
+            return
+        described = await admin.describe_topics(existing)
+        partitions = [
+            TopicPartition(description["topic"], partition["partition"])
+            for description in described
+            for partition in description["partitions"]
+        ]
+        high_water_marks = await consumer.end_offsets(partitions)
+        await admin.delete_records(
+            {
+                partition: RecordsToDelete(before_offset=offset)
+                for partition, offset in high_water_marks.items()
+            }
+        )
+    finally:
+        await consumer.stop()
+        await admin.close()
+
+
+@pytest.fixture
+def broker_settings(kafka_bootstrap_servers: str, monkeypatch: pytest.MonkeyPatch) -> Settings:
+    """Settings that name the broker, for a fixture that needs only the topic layout.
+
+    Pointed at the session's broker so the raw telemetry topic is the one the
+    suite's producers and consumers use. No database is named because nothing here
+    opens one, and no consumer-group prefix is set because nothing here consumes.
+    """
+    monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", kafka_bootstrap_servers)
+    return Settings()
+
+
+@pytest.fixture
+async def isolated_broker(broker_settings: Settings, kafka_bootstrap_servers: str) -> None:
+    """Empty the event topics before a test starts its consumers.
+
+    A dependency of :func:`running_worker` and of the read side's own harness
+    rather than something a test asks for: consumer groups are created there, and
+    isolation is worth nothing unless it happened before every one of them.
+
+    The suite runs its tests one at a time, which is what lets this be a per-test
+    truncation instead of a topic namespace per test.
+    """
+    await delete_records_on(
+        kafka_bootstrap_servers, topics_the_platform_publishes_events_on(broker_settings)
+    )
