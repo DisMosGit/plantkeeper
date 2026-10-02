@@ -37,6 +37,7 @@ from cqrs.saga.storage.protocol import ISagaStorage
 
 from plantkeeper.application.errors import UnhandledSagaTriggerError
 from plantkeeper.application.ports.unit_of_work import UnitOfWork
+from plantkeeper.application.provenance import acting_as
 from plantkeeper.domain.base import DomainEvent
 from plantkeeper.domain.saga.events import (
     SagaCompensated,
@@ -136,17 +137,41 @@ class Saga(CqrsSaga, ABC):
         (plus ``SagaCompensated`` when a step was rolled back) before being
         re-raised. The redelivery that re-raise provokes stops at the delivery's
         claim — the recording commit took the claim along — so a recorded failure
-        is final: the saga stays ``failed`` for an operator.
+        is neither redelivered nor recovered until its retry budget is applied.
+
+        Everything the saga raises is attributed to the saga itself, not to the
+        consumer that triggered it: the steps' effects and the lifecycle events
+        name ``saga:<id>`` as their raiser while keeping the conversation the
+        delivery arrived on, so one correlation covers the whole chain
+        (:mod:`plantkeeper.application.provenance`).
         """
         if not self.handles(event):
             return False
         context = self.context_from_event(event)
         saga_id = self.saga_id_for(context)
+        context.saga_id = str(saga_id)
+        async with acting_as(f"saga:{saga_id}"):
+            return await self._dispatch(event, context, saga_id, dispatcher, unit_of_work)
+
+    async def _dispatch(
+        self,
+        event: DomainEvent,
+        context: SagaContext,
+        saga_id: UUID,
+        dispatcher: SagaDispatcher,
+        unit_of_work: UnitOfWork,
+    ) -> bool:
+        """Run the steps and record the lifecycle, as the saga."""
         status = await self._existing_status(saga_id)
         if status is SagaStatus.COMPLETED:
             return False
         if status is None:
             await unit_of_work.outbox.append(SagaStarted(saga_id=saga_id, saga_name=self.saga_name))
+            # Committed before the engine opens its run. The engine's first act is
+            # to roll the session back when it cannot find the saga, and a
+            # ``SagaStarted`` staged but not committed would be discarded with it —
+            # the saga would announce that it started only if it succeeded.
+            await unit_of_work.commit()
         try:
             async for _ in dispatcher.dispatch(context, saga_id=saga_id):
                 pass
@@ -179,9 +204,9 @@ class Saga(CqrsSaga, ABC):
         here rather than left to the caller, whose transaction would be rolled
         back with the exception. That commit also makes the delivery's
         ``processed_events`` claim durable, so the redelivery stops at the claim:
-        a recorded failure is final, and neither redelivery nor
-        ``SagaRecoveryJob`` (which only picks up ``running``/``compensating``)
-        re-runs the ``failed`` saga.
+        the redelivery does not re-run the ``failed`` saga, but
+        ``SagaRecoveryJob`` does — within its retry budget, and parking the process
+        once that budget is spent (``docs/sagas.md``).
         """
         await unit_of_work.outbox.append(
             SagaFailed(saga_id=saga_id, saga_name=self.saga_name, error=str(error))

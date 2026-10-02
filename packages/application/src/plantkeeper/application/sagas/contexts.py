@@ -29,6 +29,13 @@ class OnboardPlantContext(SagaContext):
     plant_id: str
     household_id: str
     species_id: str
+    saga_id: str = ""
+    """This execution's identifier, filled in by ``Saga.handle_event``.
+
+    A step needs it to record a delegated command under the process that asked for
+    it, and the context is the only thing a step is handed.
+    """
+
     watering_interval_seconds: float = 0.0
     care_schedule_created: bool = False
     notification_id: str | None = None

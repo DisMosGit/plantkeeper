@@ -30,6 +30,7 @@ from plantkeeper.application.ports.repositories import (
     SpeciesRepository,
     TelemetryRepository,
 )
+from plantkeeper.application.ports.saga_intents import SagaIntentRepository
 from plantkeeper.application.ports.sagas import (
     MissedCareWindowRepository,
     ProcessedEventRepository,
@@ -135,6 +136,17 @@ class UnitOfWork(Protocol):
     @property
     def missed_care_windows(self) -> MissedCareWindowRepository:
         """Missed-care grace windows, bound to this transaction's session."""
+        ...
+
+    @property
+    def saga_intents(self) -> SagaIntentRepository:
+        """Recorded cross-context commands, bound to this transaction's session.
+
+        A saga step that changes a context the process does not own records the
+        command here instead of writing that context's tables, in this same
+        transaction, and the command dispatcher executes it afterwards
+        (``docs/adr/0012-saga-command-dispatch.md``).
+        """
         ...
 
     async def __aenter__(self) -> Self:

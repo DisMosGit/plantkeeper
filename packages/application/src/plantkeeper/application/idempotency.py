@@ -34,6 +34,15 @@ from plantkeeper.application.ports.clock import Clock
 from plantkeeper.application.ports.idempotency import IdempotencyRecord
 from plantkeeper.application.ports.unit_of_work import UnitOfWork
 
+CREATED = 201
+"""The status a replayable create use case answers with.
+
+Defined beside :func:`commit_create` rather than in each context's command module:
+the helper stores this status with the response, so the constant and the helper
+that persists it belong together, and a command module that had to import another
+context's for the value would be the coupling this split exists to avoid.
+"""
+
 
 def request_fingerprint(command: BaseModel) -> str:
     """Return a stable digest of a command's content.

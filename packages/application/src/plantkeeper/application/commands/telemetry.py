@@ -4,15 +4,12 @@ from __future__ import annotations
 
 from plantkeeper.application.commands.base import Command, CommandHandler, IdempotentCommand
 from plantkeeper.application.errors import NotFoundError
-from plantkeeper.application.idempotency import commit_create
+from plantkeeper.application.idempotency import CREATED, commit_create
 from plantkeeper.application.ports.clock import Clock
 from plantkeeper.application.ports.unit_of_work import UnitOfWork
 from plantkeeper.application.views import SensorView
 from plantkeeper.domain.identifiers import PlantId, SensorId
 from plantkeeper.domain.telemetry.sensor import Sensor
-
-CREATED = 201
-"""The status a create use case answers with on the first and on a replayed call."""
 
 
 class AddSensorCommand(IdempotentCommand):
