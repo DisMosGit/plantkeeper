@@ -67,6 +67,10 @@ class FakeSensors:
             return self.sensor
         return None
 
+    async def save(self, sensor: Sensor) -> None:
+        """Record the sensor's state, as the ingress's ``last_seen_at`` write does."""
+        self.sensor = sensor
+
 
 class FakeTelemetry:
     """An append-only reading store with the table's ``(sensor_id, recorded_at)`` key."""
@@ -267,6 +271,19 @@ async def test_a_valid_reading_is_stored_and_announced() -> None:
     # The event happened when the measurement did, not when it was received.
     assert event.occurred_at == NOW
     assert event.moisture.value == 42.5
+
+
+async def test_storing_a_reading_persists_the_sensors_silence_state() -> None:
+    """``last_seen_at`` travels with the reading, so the silence timer can see it."""
+    sensor = a_registered_sensor()
+    uow = FakeUnitOfWork(sensor=sensor)
+    assert sensor.last_seen_at is None
+
+    await a_consumer(uow).ingest(a_raw_payload())
+
+    assert uow.sensors.sensor is sensor
+    assert sensor.last_seen_at == NOW
+    assert sensor.offline_announced_at is None
 
 
 @pytest.mark.parametrize(

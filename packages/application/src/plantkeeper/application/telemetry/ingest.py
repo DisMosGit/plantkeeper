@@ -16,7 +16,7 @@ four things in order, and stops at the first one that says it cannot:
    simulator run is absorbed by the database rather than by a check here; a
    delivery whose row is already there announces nothing either, because its
    event travelled in the transaction that stored it;
-#. **append** the events the new reading produces to the outbox, in the same
+#. **announce** the events the new reading produces to the outbox, in the same
    transaction as the reading. The domain's own :meth:`Sensor.record` decides what
    a measurement means — :class:`TelemetryReceived` always, and the threshold
    event when the reading crosses one — and the ingress appends every event the
@@ -24,11 +24,11 @@ four things in order, and stops at the first one that says it cannot:
    sagas' input on the same at-least-once, one-writer path as every other domain
    event.
 
-The sensor row itself is deliberately not written: ``record`` updates the
-aggregate's ``last_seen_at`` in memory, and Phase 5 decided that a reading is not
-worth an ``UPDATE`` on the sensor (the readings table already answers "when did
-this sensor last report"). What the aggregate is called for here is its
-*decisions*, not its state.
+The sensor row is written too, in that same transaction: ``record`` advances the
+aggregate's ``last_seen_at`` and clears its ``offline_announced_at``, and the
+ingress saves it. Without that write the silence timer would have to scan the
+readings table to find which sensors have gone quiet, and a sensor that reported
+again would still look announced (``docs/telemetry.md``).
 
 The transactional ordering matters in both directions: a crash before the commit
 loses nothing (Kafka redelivers), and a crash after it re-inserts nothing (the
@@ -158,8 +158,9 @@ class TelemetryIngestConsumer:
             if inserted:
                 # The aggregate decides what the measurement means: always
                 # ``TelemetryReceived``, plus the threshold event it crossed. The
-                # events are drained and appended explicitly because the sensor row
-                # is not being saved, so nothing would collect them otherwise.
+                # events are drained and appended explicitly because the sensor is
+                # saved through its repository rather than through the tracking
+                # that command handlers get from the unit of work.
                 sensor.record(
                     SensorReading(
                         sensor_id=stored.sensor_id,
@@ -171,6 +172,10 @@ class TelemetryIngestConsumer:
                 )
                 for event in sensor.collect_events():
                     await self._unit_of_work.outbox.append(event)
+                # The silence state travels with the reading that changed it: a
+                # crash between the two would otherwise leave a sensor that has
+                # reported looking silent.
+                await self._unit_of_work.sensors.save(sensor)
                 await self._unit_of_work.commit()
 
         if not inserted:

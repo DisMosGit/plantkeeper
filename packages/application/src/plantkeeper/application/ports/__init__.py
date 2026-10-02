@@ -15,6 +15,10 @@ from plantkeeper.application.ports.catalog import (
     SpeciesSource,
 )
 from plantkeeper.application.ports.clock import Clock
+from plantkeeper.application.ports.dead_letter import (
+    DeadLetterPublisher,
+    DeliveryDeadLetter,
+)
 from plantkeeper.application.ports.event_publisher import EventPublisher
 from plantkeeper.application.ports.event_store import (
     EventStoreRepository,
@@ -29,6 +33,7 @@ from plantkeeper.application.ports.notifications import (
     NotificationChannel,
     NotificationChannelError,
     NotificationSubscription,
+    PendingNotificationReader,
 )
 from plantkeeper.application.ports.outbox import OutboxMessage, OutboxRepository
 from plantkeeper.application.ports.repositories import (
@@ -53,6 +58,8 @@ from plantkeeper.application.ports.unit_of_work import UnitOfWork
 __all__ = (
     "CareScheduleRepository",
     "Clock",
+    "DeadLetterPublisher",
+    "DeliveryDeadLetter",
     "EventPublisher",
     "EventStoreRepository",
     "HouseholdRepository",
@@ -69,6 +76,7 @@ __all__ = (
     "NotificationSubscription",
     "OutboxMessage",
     "OutboxRepository",
+    "PendingNotificationReader",
     "PlantRepository",
     "ProcessedEventRepository",
     "SagaState",

@@ -153,6 +153,16 @@ class SensorRepository(Repository[Sensor, SensorId], Protocol):
         """List the sensors bound to one plant."""
         ...
 
+    async def list_silent(self, threshold: datetime) -> list[Sensor]:
+        """List the sensors whose silence has not been announced yet.
+
+        Every sensor that last reported at or before ``threshold`` and has no
+        announcement recorded for that silence: what the silence timer needs, and
+        only that, so a sensor quiet for a week is a candidate once rather than
+        once per tick.
+        """
+        ...
+
 
 @runtime_checkable
 class TelemetryRepository(Protocol):
@@ -214,6 +224,13 @@ class NotificationRepository(Repository[Notification, NotificationId], Protocol)
         """
         ...
 
-    async def list_pending(self, household_id: HouseholdId) -> list[Notification]:
-        """List the household's unacknowledged notifications, oldest first."""
+    async def list_pending(
+        self, household_id: HouseholdId, *, since: NotificationId | None = None
+    ) -> list[Notification]:
+        """List the household's unacknowledged notifications, oldest first.
+
+        ``since`` answers "what has this reader not seen": only notifications
+        with a greater identifier are returned. Identifiers are UUIDv7, so their
+        order is creation order and a cursor can never skip a later one.
+        """
         ...
