@@ -66,4 +66,4 @@
 ## 12. Claims, contracts and full gates
 
 - [x] 12.1 Rewrite the README and `docs/architecture.md` where they overstate the architecture — integration between processes is events, sagas coordinate through recorded commands, the query split and the two-database topology are stated, and the telemetry gap is gone — and verify no tracked document contradicts the updated specs
-- [ ] 12.2 Regenerate the contracts and diagrams (`make contracts`) and run the full gates — `make lint`, `make test`, `make coverage` — and verify all pass with `uv run python tools/contracts.py --check` clean
+- [x] 12.2 Regenerate the contracts and diagrams (`make contracts`) and run the full gates — `make lint`, `make test`, `make coverage` — and verify all pass with `uv run python tools/contracts.py --check` clean
