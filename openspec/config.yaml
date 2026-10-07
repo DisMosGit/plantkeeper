@@ -1,32 +1,58 @@
 schema: spec-driven
 
 # Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+# Shown to AI when creating artifacts, and as an input to apply and archive.
+# Deliberately a pointer rather than a copy: the rules themselves live in the
+# files named here, and restating them would let this block drift from them.
+
+context: |
+  PlantKeeper: an event-driven plant care platform. Python 3.14 `uv` workspace,
+  DDD + CQRS + event sourcing, FastAPI/gRPC/Django on Kafka and Postgres.
+
+  The authoritative sources, none of which are duplicated here:
+  - AGENTS.md -- layer rules, the outbox and idempotency requirements, the commands.
+  - CONTRIBUTING.md -- the OpenSpec lifecycle, commit types and the one scope list.
+  - .agents/skills/commit/SKILL.md -- task/commit atomicity and the dependency ladder.
+  - docs/events.md -- the event catalogue, which AGENTS.md requires updating whenever
+    a domain event is added or renamed.
+  - docs/adr/ -- one ADR per architectural decision.
+  - openspec/specs/ -- the durable capability baseline (12 capabilities, flat layout).
 
 # Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+# Additive to the schema's built-in guidance, so these carry only what the stock
+# guidance for this artifact does NOT already say.
+#
+# Written without a colon inside each entry on purpose. A plain YAML scalar
+# containing ": " cannot fold onto an indented continuation line, and every
+# entry here is long enough to wrap.
+
+rules:
+  tasks:
+    - Name the artefact or the command, never the behaviour alone. A
+      verification that says what it checks rather than what to run cannot be
+      run, and `CONTRIBUTING.md` makes a task done only once its stated
+      verification has actually been run.
+    - State the negative case where it matters, so the verification is capable
+      of failing on the unfixed state.
+    - A task group is a commit unit. Task groups map to the dependency ladder
+      in `.agents/skills/commit/SKILL.md`, and each numbered group lands as one
+      commit in that order.
+    - The final group runs the full gate suite after every other group has
+      landed (see the `Makefile` for the targets). It carries integration
+      checks only, because a test or a document an earlier group owed stays in
+      that group -- deferring it makes a late failure cascade back through
+      every group in between.
+    - Name each gate by its project target (`make lint`, `make test`,
+      `make coverage`, `make contracts`), not by describing what it does.
 
 # Per-operation guidance (optional)
-# Add advisory guidance for how apply and archive work should be conducted.
-# This is separate from artifact rules above.
-# Example:
-#   operations:
-#     apply:
-#       guidance:
-#         - Keep test summaries concise
-#     archive:
-#       guidance:
-#         - Summarize the archive outcome before finishing
+# Advisory, and shown alongside the project context as an apply or archive input.
+
+operations:
+  apply:
+    guidance:
+      - Run `openspec validate "<change>" --strict` before starting and when the
+        artifacts change. `CONTRIBUTING.md` requires it, and the stock apply
+        instruction does not mention it.
+      - Run the command a task names. Ticking the box without running its
+        verification is the failure `CONTRIBUTING.md` records as the rule.
