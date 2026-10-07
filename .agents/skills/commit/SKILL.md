@@ -21,7 +21,7 @@ Turn the current uncommitted work into a sequence of self-contained conventional
    - `git status --short` — staged, unstaged, untracked
    - `git diff --stat` and `git diff` — unstaged content
    - `git diff --cached` — already-staged content
-   - `git log --format='%s%n%n%b' -10` — the message style this repo actually uses. Nearly every commit here carries a body, so read a few rather than only the subjects.
+   - `git log --format='%s%n%n%b' -10` — the message style this repo actually uses. Read the subjects; the bodies you will see are history. This repo now commits subjects only, so the subjects are the model and a historical body is not.
    - `git check-ignore -v <path>` — separate intentional content from ignored output. `openspec/` and `.agents/` are untracked but **not** ignored, so they are meant to be committed; never infer "ignored" from a filename alone.
 
    Read enough of every changed file to know *what it does*, not just which directory it sits in. Never group by filename alone: a single file often carries two concerns, and two files often carry one.
@@ -52,7 +52,8 @@ Turn the current uncommitted work into a sequence of self-contained conventional
    - **Types**: `feat`, `fix`, `docs`, `test`, `chore`, `build` are in use here; `refactor` and `perf` are allowed when none of those fit. There is no `ci` type — this project has no continuous integration, and adding one is out of scope.
    - **Scopes**: take them from the scope list in `CONTRIBUTING.md` (Commits → Scopes). That section is the only copy of the list; do not restate it here, and do not invent a scope outside it without saying why. Pick the narrowest scope that is true.
    - Imperative mood, lowercase, no trailing period. Keep the subject short — the longest subject in this history is 83 characters, so treat a short line as the target rather than a limit to fill.
-   - **A body is required.** Nearly every commit in this history carries one; the earliest scaffolding commits are the only exceptions. It says what changed and, more usefully, why it had to change that way, wrapped near 80 columns — typically fifteen to three hundred words, with a median near a hundred, often as bullet points. Write a subject-only commit only when the user explicitly asks for one.
+   - **The subject is the whole message. Write no body.** This repo commits subjects only, so everything the message has to say it says on one line: a subject that cannot carry the change by itself is a subject that has not been finished. `git log --oneline` is the only view anyone reads, so write for that view. This supersedes the bodies the earlier history carries — they stand as history, not as a model to copy.
+   - Never pass `-m` twice, and never let a body in through an editor: the commit must land as a single line. That absence is now the repo's convention, so a body would be the deviation worth noticing.
    - No `Co-Authored-By` or "Generated with" trailers — this repo's history has none, and `CONTRIBUTING.md` records the rule.
 
 5. **Stage explicitly**
@@ -75,7 +76,7 @@ Turn the current uncommitted work into a sequence of self-contained conventional
 
 7. **Commit and confirm the sequence**
 
-   Commit each group with its message: `git commit -m "<subject>" -m "<body>"`. Then re-run `git status --short` before starting the next group. Never `--amend` unless the user asks for it, and never amend a commit that may be pushed — check `git branch -r --contains <sha>` first.
+   Commit each group with its message on a single line: `git commit -m "<subject>"`. Then re-run `git status --short` before starting the next group. Never `--amend` unless the user asks for it, and never amend a commit that may be pushed — check `git branch -r --contains <sha>` first.
 
 8. **Stop and ask when a grouping is ambiguous**
 
